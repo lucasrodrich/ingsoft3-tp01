@@ -290,3 +290,6 @@ El build queda en `frontend/dist/`.
 
 Los tests, builds reproducibles, healthchecks e imágenes separadas permiten añadir más adelante integración y entrega continua, revisión por Pull Request y publicación en un registry. Este repositorio no incluye todavía workflows, despliegues cloud ni configuración CI/CD, tal como exige el alcance académico.
 
+## Instalación
+
+git clone https://github.com/lucasrodrich/ingsoft3-tp01.git
