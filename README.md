@@ -1,4 +1,4 @@
-# Proyecto IngSoft3 - versión B
+# Proyecto IngSoft3 - versión A
 Aplicación web full-stack para administrar mesas, menú, pedidos y reservas de un restaurante con datos aislados por usuario.
 
 ## Comandos rápidos
