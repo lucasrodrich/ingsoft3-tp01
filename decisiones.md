@@ -53,3 +53,73 @@ lo hice yo, corriendo cada comando en mi propia terminal y revisando el resultad
 
 Cómo lo verifiqué: no copié ningún comando sin entender qué hacía primero, y contrasté lo que
 proponía contra la guía del TP y la salida real de mi terminal.
+
+## TP2 — Contenedores
+
+### Qué app elegí y por qué
+
+Elegí mi propio "Sistema de Gestión de Restaurante": backend en Python (FastAPI) + frontend en React
+(Vite) + PostgreSQL. Contra los criterios de la guía:
+
+- **Buildea y corre localmente sin magia**: sí, ya lo tenía funcionando con `docker compose up`
+  antes de empezar este TP.
+- **Tiene tests**: el backend trae `pytest` (auth, mesas/productos, pedidos, reservas) y el frontend
+  tiene tests con Vitest — base para el TP5.
+- **La entiendo lo suficiente para modificarla**: la escribí yo, así que puedo tocar cualquier parte
+  en la defensa oral o en el Integrador.
+- **Tamaño**: alcanza con CRUD + un puñado de pantallas (mesas, menú, pedidos, reservas) — no le
+  agregué nada de más.
+
+### Decisiones de contenerización
+
+- **Imágenes base**: `python:3.13-slim` para el backend (liviana, sin herramientas de más),
+  `node:22-alpine` solo para la etapa de *build* del frontend, y `nginx:1.27-alpine` para servirlo en
+  producción.
+- **Multi-stage en los dos**: el backend separa una etapa que instala las dependencias con `pip
+  install --prefix=/install` de una etapa final que solo copia ese directorio y el código — así el
+  cache de `pip` no viaja a la imagen final. El frontend separa el build de Vite (que necesita todo
+  el toolchain de Node) de la imagen final, que es nginx sirviendo estáticos.
+- **Qué persiste y qué no**: solo los datos de PostgreSQL, en el volumen nombrado `db_data`. Los
+  contenedores de `backend` y `frontend` son descartables — se pueden recrear sin perder nada, porque
+  no guardan estado propio.
+- **Comunicación por nombre, no por IP**: el backend se conecta a `Host=db`, el nombre del servicio
+  en la red de compose; el frontend llama a `/api/...` con ruta relativa y es **nginx** el que la
+  reenvía a `http://backend:8080` puertas adentro — así el mismo build del frontend sirve en
+  cualquier entorno, sin CORS que configurar.
+- **Puerto de la base en el host**: mapeado a `5433` (en vez del estándar `5432`) porque en mi
+  máquina ya había otro PostgreSQL usando ese puerto. Puertas adentro de la red de compose el puerto
+  sigue siendo el interno de Postgres (`5432`), así que no afecta a cómo se conectan `backend` y
+  `db` entre sí.
+
+### Problemas encontrados y cómo los resolví
+
+- **El `backend/Dockerfile` no era multi-stage.** Tenía una sola etapa que instalaba dependencias y
+  copiaba el código en la misma imagen final. Lo separé en una etapa `build` (solo instala con `pip
+  install --prefix=/install`) y una etapa final que copia `/install` y el código — reconstruí y
+  confirmé que el backend seguía respondiendo `{"status":"healthy"}` igual que antes.
+- **Docker Desktop estaba apagado.** `docker ps` devolvía `Cannot connect to the Docker daemon`
+  aunque `docker --version` sí contestaba (eso solo prueba que el binario está instalado, no que el
+  motor está corriendo). Se resolvió abriendo Docker Desktop y esperando a que levantara.
+- **ghcr.io exige un token clásico, no *fine-grained*.** Generé el Personal Access Token yo mismo
+  desde GitHub (con el scope `write:packages`) y lo pegué directamente en el `docker login` de mi
+  propia terminal — nunca se lo compartí a la IA ni quedó en ningún comando registrado.
+- **Un `docker push` se cortó a mitad de camino** (bloqueado por el clasificador de permisos de la
+  herramienta que estaba usando). Se resolvió simplemente reintentando el mismo comando.
+
+### Sobre la arquitectura de las imágenes publicadas
+
+Las imágenes se construyeron en mi máquina Windows (arquitectura Intel/AMD64), así que sirven para
+esa arquitectura. Si alguien con un procesador ARM (por ejemplo, una Mac moderna) intenta correrlas,
+va a ver `no matching manifest`. No lo resolví en este TP —queda para cuando aparezca `docker
+buildx` en el TP7— pero lo dejo anotado acá porque es exactamente el tipo de detalle que se pregunta
+en la defensa.
+
+### Declaración de uso de IA (TP2)
+
+Usé Claude como apoyo para: recordar la sintaxis de comandos de Docker/Compose, detectar que el
+Dockerfile del backend no era multi-stage, y automatizar la ejecución de la guía (levantar el
+stack, probar persistencia, comparar tamaños, tagear y publicar las imágenes) mientras yo confirmaba
+los pasos sensibles. Generar el Personal Access Token de GitHub y pegarlo en `docker login` lo hice
+yo mismo, en mi propia terminal, sin compartirlo. Verifiqué cada resultado con salidas reales
+(`docker compose ps`, `curl` a `/health` y a la API, `docker images`, la página de *Packages* de
+GitHub) en vez de asumir que algo había funcionado porque el comando no dio error.
