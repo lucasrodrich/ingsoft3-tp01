@@ -123,3 +123,65 @@ los pasos sensibles. Generar el Personal Access Token de GitHub y pegarlo en `do
 yo mismo, en mi propia terminal, sin compartirlo. Verifiqué cada resultado con salidas reales
 (`docker compose ps`, `curl` a `/health` y a la API, `docker images`, la página de *Packages* de
 GitHub) en vez de asumir que algo había funcionado porque el comando no dio error.
+
+## TP3 — Planificación y trazabilidad
+
+### 1. Duración del sprint
+
+Elegí **2 semanas**, que es la duración que trae por defecto el campo *Iteration* de GitHub
+Projects. La cátedra todavía no había publicado la fecha de entrega de este TP en el momento de
+armarlo, así que no había un calendario concreto contra el cual ajustar el número; frente a eso,
+dejar el default es razonable: dos semanas alcanzan para que una historia con un par de tareas
+tenga margen real de principio a fin sin que el sprint quede vacío de contenido, que es el riesgo
+de un ciclo demasiado corto para este volumen de trabajo.
+
+### 2. Límite de trabajo en progreso
+
+Elegí **2**, siguiendo la regla de arranque de la guía (cantidad de personas + 1). Trabajando
+solo, eso da 1 + 1 = 2: el "+1" es la válvula para poder avanzar en una segunda cosa mientras la
+primera queda esperando algo externo (por ejemplo, una respuesta o una revisión) sin que esa espera
+bloquee todo el flujo. Si nunca llego a tocar el límite, es señal de que está puesto demasiado alto
+para mi volumen real de trabajo en paralelo.
+
+### 3. Diagnóstico de la historia mal escrita
+
+La historia *"Como desarrollador quiero crear la tabla usuarios"* está mal escrita por dos motivos:
+le falta el **"para"** (el beneficio que justificaría hacerla), y en realidad es una **tarea
+disfrazada de historia** — "crear una tabla" es un paso técnico interno, no algo que un desarrollador
+quiera como capacidad de valor observable por alguien. La reescribiría subiendo un nivel de
+abstracción, por ejemplo: *"Como usuario quiero poder iniciar sesión en el sistema, para acceder solo
+a mi propia información"* — y "crear la tabla usuarios" pasaría a ser una de sus tareas técnicas, no
+la historia en sí.
+
+### 4. Problemas encontrados y cómo los resolví
+
+- **El token de `gh` no tenía el scope `project`.** Al intentar `gh project list` tiró un error de
+  permisos faltantes. Se resolvió con `gh auth refresh -s project`, confirmando en el navegador el
+  permiso nuevo.
+- **Continuación de línea con `\` no funciona en PowerShell.** Copié comandos multilínea pensados
+  para bash (con `\` al final de cada línea) y PowerShell los interpretó como comandos sueltos,
+  tirando errores de `Unexpected token`. Se resolvió escribiendo cada comando en una sola línea, o
+  usando here-strings (`@' ... '@`) para los bodies con saltos de línea, y agrupando todo en un
+  script `.ps1` para evitar que la terminal partiera un pegado largo en líneas sueltas.
+- **Comillas dobles embebidas rompieron un `gh issue create`.** El body del issue del bug tenía
+  `"docker compose up"` entre comillas dentro del texto; al pasarlo como argumento a `gh.exe`,
+  PowerShell interpretó esas comillas internas como delimitadoras y cortó el argumento a la mitad
+  (`unknown arguments ["compose" "up y abrir..."]`). Se resolvió escribiendo el body a un archivo
+  (`bug-body.md`) y usando `--body-file` en vez de `--body`, evitando el problema de quoting por
+  completo.
+- **Confusión inicial sobre qué hace `Closes #N`.** Al principio pensé que alcanzaba con que el
+  commit describiera bien el trabajo hecho para que quedara relacionado con el issue. En realidad
+  es un mecanismo puramente textual: GitHub busca la palabra clave literal (`Closes`/`Fixes`/
+  `Resolves` + `#numero`) en la descripción del PR, sin comparar significado ni contenido. Un commit
+  bien nombrado es buena práctica pero no reemplaza esa palabra clave exacta.
+
+### 5. Declaración de uso de IA (TP3)
+
+Usé Claude como apoyo para: automatizar la creación de los issues (épica, historia, 2 tareas, bug)
+y su vinculación como sub-issues vía `gh issue edit --add-sub-issue`, diagnosticar los errores de
+sintaxis de PowerShell y de quoting que fueron apareciendo, y armar el workflow mínimo
+`.github/workflows/ci.yml` del PR de trazabilidad. Las decisiones de fondo —la duración del sprint,
+el número del límite de WIP, y la creación de la vista Board y el campo Iteration en la interfaz
+web de GitHub Projects— las hice yo, verificando cada paso contra la salida real de mis propios
+comandos (`gh issue list`, `gh project item-list`, `gh api .../sub_issues`) y contra lo que veía en
+el tablero, en vez de asumir que algo había quedado bien solo porque el comando no tiró error.
