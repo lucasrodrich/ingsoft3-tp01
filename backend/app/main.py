@@ -15,7 +15,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Sistema de Gestión de Restaurante", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="RestoFlow", version="1.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=False,
                    allow_methods=["*"], allow_headers=["*"])
 
