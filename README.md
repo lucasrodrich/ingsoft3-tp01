@@ -1,4 +1,5 @@
 # RestoFlow
+
 Aplicación web full-stack para administrar mesas, menú, pedidos y reservas de un restaurante con datos aislados por usuario.
 
 Proyecto de la materia IngSoft3 - versión A.
@@ -30,17 +31,17 @@ docker compose up -d --build
 
 Este comando construye el backend y el frontend, inicia PostgreSQL, FastAPI y Nginx, y los deja ejecutándose en segundo plano.
 
-| Acción | Comando |
-| --- | --- |
+| Acción               | Comando                        |
+| -------------------- | ------------------------------ |
 | Levantar y construir | `docker compose up -d --build` |
-| Levantar | `docker compose up -d` |
-| Ver estado | `docker compose ps` |
-| Ver logs | `docker compose logs -f` |
-| Detener | `docker compose stop` |
-| Iniciar | `docker compose start` |
-| Reiniciar | `docker compose restart` |
-| Bajar | `docker compose down` |
-| Borrar también DB | `docker compose down -v` |
+| Levantar             | `docker compose up -d`         |
+| Ver estado           | `docker compose ps`            |
+| Ver logs             | `docker compose logs -f`       |
+| Detener              | `docker compose stop`          |
+| Iniciar              | `docker compose start`         |
+| Reiniciar            | `docker compose restart`       |
+| Bajar                | `docker compose down`          |
+| Borrar también DB    | `docker compose down -v`       |
 
 URLs: frontend [http://localhost:3000](http://localhost:3000), API [http://localhost:8080](http://localhost:8080), Swagger [http://localhost:8080/docs](http://localhost:8080/docs) y health [http://localhost:8080/health](http://localhost:8080/health).
 
@@ -140,15 +141,15 @@ Para simplificar este proyecto académico, el frontend mantiene el token en `loc
 
 ## Variables de entorno
 
-| Variable | Propósito |
-| --- | --- |
-| `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | Inicialización del contenedor PostgreSQL |
-| `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` | Conexión SQLAlchemy |
-| `JWT_SECRET` | Secreto obligatorio de firma |
-| `JWT_EXPIRE_MINUTES` | Duración del token, predeterminado 1440 |
-| `APP_TIMEZONE` | Día local usado por reservas y dashboard |
-| `SERVER_HOST`, `SERVER_PORT` | Escucha de Uvicorn |
-| `CORS_ORIGINS` | Orígenes permitidos separados por coma |
+| Variable                                                  | Propósito                                |
+| --------------------------------------------------------- | ---------------------------------------- |
+| `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`       | Inicialización del contenedor PostgreSQL |
+| `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` | Conexión SQLAlchemy                      |
+| `JWT_SECRET`                                              | Secreto obligatorio de firma             |
+| `JWT_EXPIRE_MINUTES`                                      | Duración del token, predeterminado 1440  |
+| `APP_TIMEZONE`                                            | Día local usado por reservas y dashboard |
+| `SERVER_HOST`, `SERVER_PORT`                              | Escucha de Uvicorn                       |
+| `CORS_ORIGINS`                                            | Orígenes permitidos separados por coma   |
 
 `.env` está ignorado por Git; `.env.example` sí debe versionarse.
 
@@ -156,17 +157,17 @@ Para simplificar este proyecto académico, el frontend mantiene el token en `loc
 
 Sólo registro, login y health son públicos. Swagger y Redoc quedan disponibles para desarrollo.
 
-| Dominio | Método y ruta |
-| --- | --- |
-| Auth | `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/me` |
-| Mesas | `GET/POST /api/mesas`, `GET/PUT/DELETE /api/mesas/{id}`, `PATCH /api/mesas/{id}/estado` |
-| Categorías | `GET/POST /api/categorias`, `GET/PUT/DELETE /api/categorias/{id}` |
-| Productos | `GET/POST /api/productos`, `GET/PUT/DELETE /api/productos/{id}`, `PATCH /api/productos/{id}/disponibilidad` |
-| Pedidos | `GET/POST /api/pedidos`, `GET/DELETE /api/pedidos/{id}`, `PATCH /api/pedidos/{id}/estado` |
-| Items | `POST /api/pedidos/{id}/items`, `PUT/DELETE /api/pedidos/{id}/items/{itemId}` |
-| Reservas | `GET/POST /api/reservas`, `GET/PUT/DELETE /api/reservas/{id}`, `PATCH /api/reservas/{id}/estado` |
-| Dashboard | `GET /api/dashboard` |
-| Health | `GET /health` |
+| Dominio    | Método y ruta                                                                                               |
+| ---------- | ----------------------------------------------------------------------------------------------------------- |
+| Auth       | `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/me`                                       |
+| Mesas      | `GET/POST /api/mesas`, `GET/PUT/DELETE /api/mesas/{id}`, `PATCH /api/mesas/{id}/estado`                     |
+| Categorías | `GET/POST /api/categorias`, `GET/PUT/DELETE /api/categorias/{id}`                                           |
+| Productos  | `GET/POST /api/productos`, `GET/PUT/DELETE /api/productos/{id}`, `PATCH /api/productos/{id}/disponibilidad` |
+| Pedidos    | `GET/POST /api/pedidos`, `GET/DELETE /api/pedidos/{id}`, `PATCH /api/pedidos/{id}/estado`                   |
+| Items      | `POST /api/pedidos/{id}/items`, `PUT/DELETE /api/pedidos/{id}/items/{itemId}`                               |
+| Reservas   | `GET/POST /api/reservas`, `GET/PUT/DELETE /api/reservas/{id}`, `PATCH /api/reservas/{id}/estado`            |
+| Dashboard  | `GET /api/dashboard`                                                                                        |
+| Health     | `GET /health`                                                                                               |
 
 Productos acepta `categoriaId`, `disponible` y `texto`; pedidos, `estado`, `mesaId`, `desde` y `hasta`; reservas, `fecha`, `desde`, `hasta`, `estado`, `mesaId` y `texto`.
 
@@ -294,3 +295,7 @@ Los tests, builds reproducibles, healthchecks e imágenes separadas permiten añ
 ## Instalación
 
 git clone https://github.com/lucasrodrich/ingsoft3-tp01.git
+
+## Cache de CI
+
+El pipeline de GitHub Actions reutiliza las capas de Docker entre corridas - ver `decisiones.md`.
