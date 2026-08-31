@@ -185,3 +185,93 @@ el número del límite de WIP, y la creación de la vista Board y el campo Itera
 web de GitHub Projects— las hice yo, verificando cada paso contra la salida real de mis propios
 comandos (`gh issue list`, `gh project item-list`, `gh api .../sub_issues`) y contra lo que veía en
 el tablero, en vez de asumir que algo había quedado bien solo porque el comando no tiró error.
+
+## TP4 — CI: Pipelines as Code
+
+### 1. Estructura del pipeline: por qué dos jobs en paralelo
+
+El backend y el frontend tienen cada uno su propio `Dockerfile` desde el TP2 (imágenes base distintas,
+etapas distintas, nada que compartan a nivel de build). Por eso el workflow define dos jobs —
+`build-backend` y `build-frontend`— en vez de uno solo: cada uno construye una imagen independiente
+con `docker/build-push-action`, apuntando a `context: ./backend` y `context: ./frontend`
+respectivamente. Al no declarar `needs:` entre ellos, GitHub Actions los corre en paralelo, cada uno
+en su propia máquina Ubuntu limpia, sin compartir filesystem ni memoria entre sí. Tiene sentido:
+un error en el backend no tiene por qué frenar la verificación del frontend, y viceversa — son dos
+piezas independientes que solo comparten repositorio.
+
+El `id` de cada job (`build-backend`, `build-frontend`) no es cosmético: es el nombre exacto del
+*check* que después exigí como obligatorio en la protección de rama (§3). Si renombrara el job
+después de configurar el gate, quedaría exigiendo un check que ya no existe y bloquearía todo.
+
+### 2. Qué cachea el pipeline
+
+Lo que se cachea son las **capas de Docker** de cada imagen — no el código, no dependencias sueltas,
+sino literalmente las capas que produce `docker build` (una por cada instrucción `RUN`/`COPY`/`ADD`
+del Dockerfile). Se guardan en el almacén de cache de GitHub Actions (`cache-from`/`cache-to:
+type=gha`), usando el constructor *buildx* (`docker/setup-buildx-action`) en vez del Docker de
+fábrica, porque el de fábrica guarda las capas solo en el disco de la máquina que las construyó —
+y esa máquina se destruye al terminar el job, así que ahí no sirven de nada.
+
+Cada job usa un `scope` distinto (`scope=backend` / `scope=frontend`). Es la parte más fácil de
+pasar por alto: sin `scope`, los dos jobs comparten el mismo estante de cache por default y se pisan
+entre sí — el último en terminar sobreescribe lo que dejó el otro, y el síntoma es que un job
+muestra `CACHED` y el otro no, y cuál cambia de una corrida a la siguiente sin razón aparente.
+
+Confirmé el cache funcionando con dos corridas seguidas sobre el mismo PR (esperando a que la
+primera terminara del todo antes de disparar la segunda con un commit vacío): en la segunda corrida,
+el log de `build-backend` mostró `CACHED` en las capas de instalación de dependencias
+(`pip install --prefix=/install -r requirements.txt`), que no habían cambiado entre una corrida y
+la otra.
+
+**Qué pasa si el cache desaparece**: nada catastrófico, solo se pierde la optimización. GitHub puede
+desalojarlo en cualquier momento (tiene límite de tamaño y política de expiración propia), así que
+el pipeline tiene que poder reconstruir todo desde cero sin el cache — más lento, pero funcional. Si
+un build fallara *sin* cache, no sería un problema de cache: sería una dependencia escondida que
+el cache estaba tapando, y eso sí sería un bug real a corregir.
+
+### 3. Por qué el pipeline construye con el Dockerfile en vez de compilar por su cuenta
+
+El workflow no tiene ninguna línea de `pip install` ni `npm run build` sueltas — delega el build
+entero a `docker/build-push-action`, que usa el `Dockerfile` de cada carpeta. La razón es evitar
+tener **dos definiciones de build** que puedan divergir: si el pipeline compilara "a su manera" con
+comandos propios, podría estar verificando una construcción distinta de la que después efectivamente
+se empaqueta y se despliega — y un día podrían dar resultados distintos sin que nadie se diera cuenta
+hasta que fuera tarde. Usando el mismo Dockerfile que ya usé a mano en el TP2, lo que verifica el
+pipeline es exactamente lo que se va a desplegar.
+
+### 4. Problemas encontrados y cómo los resolví
+
+- **Un YAML mal pegado quedó con `jobs:` y `build-backend:` duplicados.** Al reemplazar el esqueleto
+  del TP3 por el workflow completo, el editor guardó una versión con un bloque roto en el medio
+  (una repetición parcial de `on:`/`jobs:` que no tenía sentido ahí). El primer síntoma fue que
+  `git add` + `git commit` no detectaban cambios reales, porque en un intento anterior había hecho
+  `commit --amend` sin haber guardado la corrección en el editor primero. Se resolvió revisando con
+  `git diff` **antes** de cada commit —no asumiendo que lo que veía en el editor ya estaba guardado—
+  hasta confirmar que el archivo en disco era exactamente el que quería commitear.
+- **`docker build ./backend` fallaba con un error de conexión al daemon.** No tenía nada que ver con
+  la dependencia rota que había agregado a propósito: era que Docker Desktop estaba apagado en ese
+  momento (el mismo tipo de problema que ya había documentado en el TP2). Se resolvió levantando
+  Docker Desktop y esperando a que el motor terminara de iniciar antes de reintentar.
+- **El editor chocó de nuevo con un cambio de rama** (mismo problema que en el TP1, esta vez con
+  `README.md`): tenía el archivo abierto con una versión vieja en memoria mientras cambiaba entre
+  `main` y una rama nueva, y al guardar tiró *"The content of the file is newer"*. Se resolvió
+  cerrando la pestaña sin guardar, reabriendo el archivo desde disco, y recién ahí editando de
+  nuevo — en vez de forzar el guardado y arriesgarme a pisar contenido que no había visto.
+- **"Files changed" del PR de la demo aparecía vacío después de arreglar el error.** Al principio
+  pareció que el fix no se había subido. En realidad tenía sentido: rompí y arreglé la misma línea
+  de `requirements.txt` dentro del mismo PR, así que el diff neto entre `main` y la rama terminó
+  siendo cero (el archivo volvió a quedar igual que al principio). La evidencia de la rotura y el
+  arreglo no estaba en "Files changed" —que compara solo el estado final— sino en la pestaña
+  **Commits** del PR (los dos commits por separado) y en el historial de corridas de Actions (una
+  en rojo, la siguiente en verde).
+
+### 5. Declaración de uso de IA (TP4)
+
+Usé Claude como apoyo para: armar el YAML del workflow (jobs, triggers, cache con `scope` separado),
+explicarme línea por línea qué hace cada parte antes de escribirla, y diagnosticar en el momento los
+problemas que fueron apareciendo (el YAML duplicado, Docker Desktop apagado, el choque del editor
+con `git checkout`, y la confusión del diff vacío en el PR de la demo). Las decisiones de fondo —qué
+romper para demostrar el gate, cuándo mergear cada PR, en qué orden dejar los dos PRs abiertos para
+poder ver el "Update branch"— las fui resolviendo yo mismo, corriendo cada comando en mi propia
+terminal y revisando el resultado real en GitHub (checks, logs de Actions, estado de cada PR) antes
+de seguir, en vez de asumir que algo había quedado bien solo porque un comando no tiró error.
