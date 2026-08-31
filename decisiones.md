@@ -188,7 +188,28 @@ el tablero, en vez de asumir que algo había quedado bien solo porque el comando
 
 ## TP4 — CI: Pipelines as Code
 
-### 1. Estructura del pipeline: por qué dos jobs en paralelo
+### 1. Qué dispara el pipeline, y por qué esos dos triggers
+
+El workflow corre en dos eventos: `pull_request` hacia `main` y `push` hacia `main`. No son
+redundantes, cada uno cumple un rol distinto:
+
+- **`pull_request`** es el que hace el trabajo real: corre **antes** de que el cambio se mezcle con
+  `main`, sobre el resultado propuesto de la mezcla. Es el que alimenta al gate (§5) — sin esto no
+  habría nada que exigir como requisito de merge.
+- **`push`** corre **después** de cada merge, cuando el commit ya está en `main`. No bloquea nada
+  (ya es tarde para eso), pero cumple dos funciones: es la corrida que le da estado al badge del
+  README (que siempre lee el último resultado de `main`), y es la que deja el cache disponible "para
+  todos" — cualquier PR nuevo que parta de `main` puede reusar esas capas desde su primera corrida,
+  en vez de arrancar de cero.
+
+Puede haber CI sin este pipeline: la práctica de "integrar seguido y verificar cada integración" no
+depende de una herramienta puntual — podría hacerse (mal) a mano, corriendo los tests localmente
+antes de cada push. Y puede haber un pipeline sin que eso sea CI: si nadie lo revisa, si `main` queda
+en rojo días enteros sin que se lo trate como prioridad, o si el pipeline no es un requisito real de
+merge, tener el YAML no alcanza — es la práctica cultural (§2.1 de la guía) la que lo convierte en
+CI de verdad, no el archivo en sí.
+
+### 2. Estructura del pipeline: por qué dos jobs en paralelo
 
 El backend y el frontend tienen cada uno su propio `Dockerfile` desde el TP2 (imágenes base distintas,
 etapas distintas, nada que compartan a nivel de build). Por eso el workflow define dos jobs —
@@ -200,10 +221,17 @@ un error en el backend no tiene por qué frenar la verificación del frontend, y
 piezas independientes que solo comparten repositorio.
 
 El `id` de cada job (`build-backend`, `build-frontend`) no es cosmético: es el nombre exacto del
-*check* que después exigí como obligatorio en la protección de rama (§3). Si renombrara el job
+*check* que después exigí como obligatorio en la protección de rama (§5). Si renombrara el job
 después de configurar el gate, quedaría exigiendo un check que ya no existe y bloquearía todo.
 
-### 2. Qué cachea el pipeline
+**Qué produce el pipeline y dónde queda**: nada que se conserve. Las dos imágenes (`backend:ci`,
+`frontend:ci`) nacen y mueren dentro del runner — `push: false` en las dos, a propósito: este TP
+verifica que la imagen se pueda construir, no la publica en ningún lado. El lugar de una imagen
+publicada es un registry (como hice a mano en el TP2 con GHCR), y automatizar esa publicación queda
+para más adelante. La salida real de esta corrida es otra cosa: el check en verde que habilita el
+merge.
+
+### 3. Qué cachea el pipeline
 
 Lo que se cachea son las **capas de Docker** de cada imagen — no el código, no dependencias sueltas,
 sino literalmente las capas que produce `docker build` (una por cada instrucción `RUN`/`COPY`/`ADD`
@@ -229,7 +257,7 @@ el pipeline tiene que poder reconstruir todo desde cero sin el cache — más le
 un build fallara *sin* cache, no sería un problema de cache: sería una dependencia escondida que
 el cache estaba tapando, y eso sí sería un bug real a corregir.
 
-### 3. Por qué el pipeline construye con el Dockerfile en vez de compilar por su cuenta
+### 4. Por qué el pipeline construye con el Dockerfile en vez de compilar por su cuenta
 
 El workflow no tiene ninguna línea de `pip install` ni `npm run build` sueltas — delega el build
 entero a `docker/build-push-action`, que usa el `Dockerfile` de cada carpeta. La razón es evitar
@@ -239,7 +267,28 @@ se empaqueta y se despliega — y un día podrían dar resultados distintos sin 
 hasta que fuera tarde. Usando el mismo Dockerfile que ya usé a mano en el TP2, lo que verifica el
 pipeline es exactamente lo que se va a desplegar.
 
-### 4. Problemas encontrados y cómo los resolví
+### 5. El gate: qué exige `main` hoy para aceptar un merge
+
+Cierra el círculo con el TP1: allá dejé `main` protegida para que nada entrara sin pasar por un PR;
+acá le agrego la verificación automática de ese PR. Hoy, para mergear algo a `main`, se tienen que
+cumplir **dos condiciones** a la vez (`Settings → Branches`, sobre la misma regla del TP1):
+
+- **`required_status_checks`, con `contexts: ["build-backend", "build-frontend"]`**: los dos jobs
+  tienen que haber terminado en verde sobre el commit que se quiere mergear. Un solo check en rojo
+  ya bloquea el botón de merge, no hace falta que fallen los dos.
+- **`strict: true`** ("Require branches to be up to date before merging"): no alcanza con que el
+  check haya pasado alguna vez — la rama tiene que estar mezclada con la versión **actual** de
+  `main` antes de dejar mergear. Por eso, cuando mergeé el PR de la demo rota mientras tenía otro PR
+  abierto en paralelo, ese otro PR pasó a mostrar "Update branch": su check verde había quedado
+  viejo, sacado contra un `main` que ya no existía.
+
+Las revisiones humanas (`required_approving_review_count`) siguen en **0**, igual que en el TP1: como
+trabajo solo, GitHub nunca me deja aprobar mi propio PR, así que un número mayor a 0 me dejaría sin
+poder mergear nunca. Lo que bloquea el merge en este TP no es una aprobación de otra persona — es el
+pipeline en verde. La revisión humana la sigo haciendo igual, leyendo mi propio diff en "Files
+changed" antes de cada merge (regla cultural §2.1 de la guía), aunque la plataforma no me la exija.
+
+### 6. Problemas encontrados y cómo los resolví
 
 - **Un YAML mal pegado quedó con `jobs:` y `build-backend:` duplicados.** Al reemplazar el esqueleto
   del TP3 por el workflow completo, el editor guardó una versión con un bloque roto en el medio
@@ -265,7 +314,7 @@ pipeline es exactamente lo que se va a desplegar.
   **Commits** del PR (los dos commits por separado) y en el historial de corridas de Actions (una
   en rojo, la siguiente en verde).
 
-### 5. Declaración de uso de IA (TP4)
+### 7. Declaración de uso de IA (TP4)
 
 Usé Claude como apoyo para: armar el YAML del workflow (jobs, triggers, cache con `scope` separado),
 explicarme línea por línea qué hace cada parte antes de escribirla, y diagnosticar en el momento los
@@ -275,3 +324,19 @@ romper para demostrar el gate, cuándo mergear cada PR, en qué orden dejar los 
 poder ver el "Update branch"— las fui resolviendo yo mismo, corriendo cada comando en mi propia
 terminal y revisando el resultado real en GitHub (checks, logs de Actions, estado de cada PR) antes
 de seguir, en vez de asumir que algo había quedado bien solo porque un comando no tiró error.
+
+### 8. Guía rápida para la defensa: dónde mostrar cada cosa
+
+- **PR #16** — el workflow real (`build-backend`/`build-frontend` + cache), reemplaza al esqueleto
+  del TP3.
+- **PR #17** — la evidencia central: commit que rompe una dependencia del backend, check en rojo,
+  commit que la arregla, check en verde, mergeado. El diff final da vacío a propósito (rompí y
+  arreglé la misma línea); la evidencia real está en la pestaña *Commits* del PR y en el historial
+  de corridas de *Actions*.
+- **PR #18** — el PR de relleno: quedó "desactualizado" cuando mergeé el #17, mostrando el botón
+  *Update branch* (evidencia de `strict: true`). Captura en `img/updateBranch.png`.
+- **PR #19** — badge del README + esta misma sección de `decisiones.md`.
+- **`Settings → Branches`**, regla de `main` — ahí están las dos condiciones del gate (§5) en vivo.
+- **Pestaña `Actions`**, cualquier corrida con dos jobs — para mostrar `CACHED` en el log de
+  `build-backend` (segunda corrida del PR #16 en adelante).
+- **Tag y release `v4.0.0`** — cierre del práctico, mismo mecanismo que TP1/TP2/TP3.
