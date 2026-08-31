@@ -4,6 +4,8 @@ Aplicación web full-stack para administrar mesas, menú, pedidos y reservas de 
 
 Proyecto de la materia IngSoft3 - versión A.
 
+[![CI](https://github.com/lucasrodrich/ingsoft3-tp01/actions/workflows/ci.yml/badge.svg)](https://github.com/lucasrodrich/ingsoft3-tp01/actions/workflows/ci.yml)
+
 ## Comandos rápidos
 
 Primero cree el archivo de entorno:
