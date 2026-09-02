@@ -292,7 +292,7 @@ El build queda en `frontend/dist/`.
 
 ## Preparación para DevOps
 
-Los tests, builds reproducibles, healthchecks e imágenes separadas permiten añadir más adelante integración y entrega continua, revisión por Pull Request y publicación en un registry. Este repositorio no incluye todavía workflows, despliegues cloud ni configuración CI/CD, tal como exige el alcance académico.
+Los tests, builds reproducibles, healthchecks e imágenes separadas permitieron sumar integración continua (ver badge arriba y `.github/workflows/ci.yml`): cada Pull Request corre `build-backend` y `build-frontend` en paralelo, con cache de capas por `scope`, y son un requisito de merge sobre `main`. Este repositorio todavía no incluye despliegues cloud ni entrega continua (CD), tal como exige el alcance académico de este bloque.
 
 ## Instalación
 
