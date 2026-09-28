@@ -340,3 +340,230 @@ de seguir, en vez de asumir que algo había quedado bien solo porque un comando 
 - **Pestaña `Actions`**, cualquier corrida con dos jobs — para mostrar `CACHED` en el log de
   `build-backend` (segunda corrida del PR #16 en adelante).
 - **Tag y release `v4.0.0`** — cierre del práctico, mismo mecanismo que TP1/TP2/TP3.
+
+## TP5 — Calidad automatizada: tests, coverage y el umbral que frena un merge
+
+### 1. Qué lógica elegí testear y por qué
+
+El TP2/TP3 ya me habían dejado una suite (`test_auth.py`, `test_mesas_productos.py`,
+`test_pedidos.py`, `test_reservas_ownership_dashboard.py`) pero es una suite de **integración**: pasa
+por `TestClient` contra una base SQLite real, ejercitando la app de punta a punta. Es la base **media**
+de la pirámide (§2.1 de la guía), no la base. Lo que le faltaba a mi repo era la base de verdad: unit
+tests puros, sin tocar DB ni red, sobre la lógica que más duele si se rompe. Elegí 5 reglas:
+
+- **`recalculate_order`** (`app/utils/orders.py`): el total de un pedido. Si esto se rompe, un cliente
+  paga mal — es la regla con más impacto económico directo de toda la app.
+- **`ORDER_TRANSITIONS`** (misma clase): la máquina de estados de un pedido. Un bug acá deja pedidos
+  "trabados" o permite saltarse un estado (ej. cobrar un pedido que nunca se entregó).
+- **`reservations_overlap`** (`app/utils/reservations.py`): decide si dos reservas chocan. El borde
+  exacto (120 minutos) es justo donde un `<` vs `<=` cambia el comportamiento sin que se note a simple
+  vista — el tipo de bug que un test de integración normal no atrapa porque nadie prueba el minuto
+  exacto del límite.
+- **`hash_password`/`verify_password`** (`app/auth/password.py`): si esto falla, se compromete la
+  autenticación de todos los usuarios.
+- **`get_current_user`** (`app/auth/jwt.py`): la puerta de entrada a cada endpoint protegido, y la
+  elegida para el test con mock obligatorio (§3).
+
+Más tarde, mirando el reporte de coverage (§4), sumé una sexta: el `DELETE /api/mesas/{id}`, que
+tenía dos reglas de integridad de datos (no borrar una mesa con pedidos abiertos, no borrar una con
+historial) sin un solo test encima.
+
+Los archivos nuevos son `backend/tests/test_unit_*.py` (uno por regla, con el prefijo `unit` para
+distinguirlos de la suite de integración que ya tenía) — 9 métodos de test sobre 5 reglas, más el
+método que agregué después en `test_mesas_productos.py`.
+
+### 2. Parametrizado, caso de error y AAA
+
+`test_unit_transiciones_pedido.py` y `test_unit_solapamiento_reservas.py` usan
+`@pytest.mark.parametrize` (el `[Theory]`/`[InlineData]` de la guía): en vez de un test por dato,
+un método que corre varias veces. **Cuentan como un solo método cada uno** para el mínimo de 8 —ojo
+con esa trampa, la señala el instructivo— aunque el reporte muestre 4 resultados por el
+parametrizado de transiciones y 4 por el de reservas.
+
+Caso de error: `test_transicion_de_pedido_no_permitida_es_rechazada` (un estado terminal no tiene
+salida) y `test_get_current_user_sin_credenciales_lanza_401_sin_consultar_la_db` (rechazo sin
+siquiera tocar la base). El criterio que usé para juzgar si un test "vale": si invierto la regla que
+prueba (cambié `in` por `not in` en la máquina de estados, a mano, como prueba), el test se pone en
+rojo. Lo hice antes de dar por terminado cada archivo.
+
+AAA: en todos los tests nuevos separé Arrange/Act/Assert con comentarios cuando había algo que
+armar (`SimpleNamespace` para simular un pedido sin tocar la base, un doble de la sesión de DB); en
+los parametrizados no hay Arrange porque el dato entra directo por parámetro, y eso también es
+correcto según la guía (un Arrange forzado sería peor que ninguno).
+
+### 3. El mock, y por qué no tuve que refactorizar nada
+
+El ejemplo de la guía arranca con una clase que fabrica su dependencia con `new` adentro del
+constructor, y hay que sacarla para poder mockear. Mi caso fue distinto: `get_current_user` ya recibe
+la sesión de base de datos por parámetro gracias a `Depends(get_db)` de FastAPI — ya era código
+testeable de fábrica, sin que yo hiciera nada. Así que el test
+(`test_unit_autenticacion_con_mock.py`) usa directamente `unittest.mock.Mock()` para reemplazar `db`:
+
+```python
+db_doble = Mock()
+db_doble.get.return_value = usuario_autenticado
+resultado = get_current_user(credentials=credenciales, db=db_doble)
+db_doble.get.assert_called_once_with(Usuario, 42)
+```
+
+Lo que lo hace un **mock** y no un **stub** es la última línea: no miro solo qué devolvió la función
+(eso sería un stub), miro **cómo** usó la dependencia — que llamó a `db.get` exactamente una vez, con
+el modelo `Usuario` y el id que venía adentro del JWT. Si mañana alguien busca por email en vez de por
+id, o llama dos veces, este test se rompe aunque el resultado final "parezca" correcto.
+
+### 4. Coverage: el número, qué excluí, y una diferencia que no esperaba
+
+**Backend** (`pytest-cov` + `.coveragerc`, `branch = True`): excluí `app/main.py`, `app/database.py`
+y `app/config.py` (arranque/config, sin reglas de negocio) y `app/models/*` (clases de datos de
+SQLAlchemy, solo columnas y relaciones, sin comportamiento). **No excluí `app/schemas/*`** a pesar de
+parecer "solo campos": tienen `@field_validator` con lógica real (normalizan nombres, validan
+formato de email, longitud de contraseña) — excluirlos hubiera sido exactamente la trampa que
+describe la guía, esconder reglas de negocio detrás de la etiqueta "son solo datos".
+
+Con esa exclusión, el número **bajó** de 84% a 80.8% (subió después a 82.7% con el test del §1) —
+la prueba de que excluir arranque no es hacer trampa: si fuera para inflar el número, hubiera subido,
+no bajado. `main.py`/`database.py` estaban casi al 100% y "regalaban" puntos al promedio; sacarlos
+deja el número midiendo solo lo que importa.
+
+Elegí **70%** de umbral (`fail_under` en `.coveragerc`) sobre la métrica combinada que reporta
+`pytest-cov` (línea+rama), con ~12 puntos de colchón sobre mi medición real (82.7% hoy). Descarté 75%
+y 80% por ser umbrales casi pegados a la medición actual: cualquier refactor chico que no toque lógica
+de negocio los rompería, entrenando a ignorar el gate en vez de respetarlo.
+
+**Lo que no esperaba**: medido por separado, la cobertura de **rama pura** da **55.2%**, bien por
+debajo del 85.0% de **línea pura** — la métrica combinada (82.7%) esconde esa diferencia. Es la
+demostración concreta de la advertencia de la guía ("branch es la métrica más honesta, line puede
+mentirte más"): con 85% de línea podría creer que casi todo está probado, cuando en realidad casi la
+mitad de las decisiones (`if`/`?.`/`??`) del código sólo se ejercitan por un camino.
+
+**Frontend** (`vitest` + `@vitest/coverage-v8`, `thresholds` en `vite.config.js`): incluí solo
+`src/utils/**` y `src/api/client.js` — **no** los `.jsx` (necesitarían DOM para testear de verdad, y
+esta materia pide unit tests sin DOM) ni `src/api/api.js` completo. Ese último archivo mezclaba
+`apiFetch` (lógica real, ya testeada) con ~20 funciones de una sola línea (`mesasApi.create`,
+`productosApi.list`, etc.) que no tienen comportamiento propio, solo mapean un nombre a una ruta.
+En vez de excluirlas "a ojo", separé el archivo: `src/api/client.js` (la lógica, la que entra en la
+cuenta) y `src/api/api.js` (reexporta `client.js` + los wrappers sin lógica, afuera de la cuenta) —
+mismo criterio que la guía usa para `Program.cs`: mover lo que no tiene comportamiento a su propio
+archivo en vez de fingir que se puede excluir "a medias" un archivo mezclado.
+
+Elegí **55%** sobre las 4 métricas (`statements`, `branches`, `functions`, `lines`) — con la medición
+de ese momento en 66.66% de rama (la más baja), me daba ~11 puntos de colchón, el mismo criterio de
+margen que usé en el backend. La suite creció después (agregué 2 tests más sobre casos reales de
+`client.js` que no estaban probados: la respuesta exitosa y el 401 que limpia el token) y hoy mide
+85.24% de rama; dejé el umbral en 55% sin subirlo — es una decisión que no revisé, y si en la defensa
+me preguntan por qué no lo subí, la respuesta honesta es esa: lo fijé mirando el peor momento y no
+volví a tocarlo.
+
+### 5. El ejercicio de la rama sin cubrir
+
+Mirando el reporte del backend encontré que **todo** el endpoint `DELETE /api/mesas/{id}`
+(`app/routers/mesas.py`, líneas 66-74) estaba en rojo: ni un test lo ejecutaba, ninguna de sus dos
+reglas de integridad (no borrar con pedidos abiertos, no borrar con historial) tenía nada que la
+verificara.
+
+- **Qué línea es**: `app/routers/mesas.py:69`, `if active or future:` (y también 71, el segundo `if`
+  de la misma función).
+- **Qué entrada la recorrería**: una mesa con un pedido en estado activo (para el primer `if`), y
+  luego esa misma mesa con el pedido ya cerrado pero existente (para el segundo `if`, "historial").
+- **Qué decidí**: agregarlo. Es una regla de integridad real (evita perder el historial de una mesa
+  borrándola por error) y el costo de escribirlo era bajo con la infraestructura de tests que ya
+  tenía (`client`/`register` de `conftest.py`). El test quedó en
+  `test_mesas_productos.py::test_mesa_delete_blocked_by_pending_activity_then_by_history_then_allowed`
+  y subió la cobertura de `mesas.py` de 59.4% a 78.3%.
+
+### 6. Los dos Pull Requests que prueban el freno
+
+Son dos PRs distintos, con roles distintos (la guía avisa que es el punto que más se confunde):
+
+- **[PR #23](https://github.com/lucasrodrich/ingsoft3-tp01/pull/23)** — la historia completa,
+  **mergeado**. Primer commit: agregué `validarCapacidadMesa`/`sugerirMesa` (lógica real de negocio
+  para el frontend, validar que una reserva entre en la mesa elegida) **sin tests**. La corrida
+  [36480751780](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/36480751780) se puso roja
+  en el paso "Correr los tests con coverage (frontend)" —branches cayó a 50.81%, contra el 55%
+  configurado— y `gh pr view` confirmó `mergeStateStatus: BLOCKED` con el build **compilando** y el
+  resto de los tests en verde: la cobertura era la única razón. Segundo commit, misma rama: agregué
+  8 tests (parametrizado + AAA) que faltaban. La corrida
+  [36480994825](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/36480994825) quedó verde,
+  `mergeStateStatus` pasó a `CLEAN`, y mergeé.
+- **[PR #24](https://github.com/lucasrodrich/ingsoft3-tp01/pull/24)** — queda **abierto y en rojo
+  hasta la defensa**, a propósito. Agrega `calcularPropina`/`dividirCuenta`/`sugerirPorcentajePropina`
+  (otra pieza de lógica real, cálculo de propina y división de cuenta) sin tests, y **no lo arreglo**:
+  es la prueba de que el freno sigue funcionando sin que yo tenga que intervenir de nuevo cada vez.
+  `gh pr view 24` da `mergeStateStatus: BLOCKED`.
+
+Los dos required checks (`build-backend`, `build-frontend`) son los mismos del TP4 — no tuve que
+tocar la configuración de la rama protegida: al no renombrar los jobs, los checks que ya eran
+obligatorios automáticamente pasaron a reaccionar también a la cobertura, no solo al build.
+
+### 7. Por qué coverage alto no garantiza calidad (con mi propio ejemplo)
+
+No hizo falta inventar el ejemplo: mientras armaba `test_unit_calculo_pedido.py` escribí a propósito
+una versión mala primero, para verla en la práctica —
+
+```python
+def test_esto_no_verifica_nada():
+    recalculate_order(SimpleNamespace(items=[], total=None))  # se ejecuta... y no hay ningún Assert
+```
+
+— y coverage la cuenta igual que a un test de verdad: la línea se ejecutó, así que "está cubierta".
+Ese test no me hubiera avisado si `recalculate_order` empezara a devolver el total mal calculado. Es
+la razón de fondo por la que branch coverage (§4) me dio una sorpresa: un número alto (línea, 85%)
+puede convivir con la mitad de las decisiones del código sin verificar (rama, 55.2%) — ninguna de las
+dos métricas, por sí sola, contesta "¿mis tests comprueban algo de verdad?". Eso solo lo contesta
+mirar el test y preguntarse qué invertiría el resultado sin que ningún assert lo note.
+
+### 8. Problemas encontrados y cómo los resolví
+
+- **`ModuleNotFoundError: No module named 'app'` corriendo la etapa de tests en Docker.** Local usaba
+  `python -m pytest` (que agrega el directorio actual al `sys.path`); el `ENTRYPOINT` del Dockerfile
+  tenía `pytest` a secas, que no lo hace. Se resolvió cambiando el `ENTRYPOINT` a
+  `["python", "-m", "pytest", ...]`.
+- **`.dockerignore` del backend excluía `tests`** desde el TP4 (cuando la imagen no los necesitaba
+  para nada). Al agregar la etapa de tests, `COPY tests ./tests` copiaba una carpeta vacía sin ningún
+  error visible — el síntoma era "0 tests collected", no un fallo de build. Se resolvió sacando
+  `tests` del `.dockerignore`.
+- **`EBUSY: resource busy or locked, rmdir '/app/coverage'`** corriendo la etapa de tests del
+  frontend con un volumen montado directo sobre la carpeta de coverage: `vitest` intenta borrar y
+  recrear esa carpeta antes de escribir, y no se puede hacer `rmdir` sobre un punto de montaje. Se
+  resolvió montando un directorio contenedor (`/out`) y apuntando `--coverage.reportsDirectory` a una
+  subcarpeta adentro (`/out/coverage`), que sí se puede crear y borrar libremente.
+- **El `-v` de Docker no montaba nada probando local en Git Bash** (`/tmp/...` quedaba vacío del lado
+  del host aunque el contenedor decía haber escrito ahí). Es la conversión automática de rutas de
+  MSYS rompiendo el argumento `host:contenedor` por el `:` del medio. Se resolvió con
+  `MSYS_NO_PATHCONV=1` delante del `docker run` **solo para probar local** — en el runner de GitHub
+  Actions (bash de Linux nativo) el mismo `-v` del `ci.yml` anda sin ningún truco.
+- **Un `docker run | tee archivo` podía esconder un test en rojo.** Sin `set -o pipefail`, bash
+  devuelve el código de salida del último comando del pipe (`tee`, que casi siempre sale bien) y no
+  el de `docker run` — el job seguiría "verde" con la suite rota. Lo comprobé a propósito: corrí
+  `vitest` con coverage por debajo del umbral y confirmé `exit code 1` **sin** el pipe antes de
+  confiar en que `set -o pipefail` lo iba a propagar bien dentro del `ci.yml`.
+
+### 9. Declaración de uso de IA (TP5)
+
+Usé Claude como tutor paso a paso, bloque por bloque (suite → coverage → pipeline → gate → PRs de
+demostración → esta sección), pidiéndole que me explicara cada decisión antes de escribir código, y
+como ejecutor de los comandos de git/gh/docker en su propia terminal mientras yo confirmaba cada
+resultado en la mía. Las decisiones de fondo las tomé yo después de que me explicara el trade-off:
+elegí 70%/55% de umbral entre las opciones que me dio, decidí testear el `DELETE /api/mesas` en vez
+de descartar el ejercicio, y elegí separar `api.js`/`client.js` en vez de dejar el número de coverage
+mintiendo. Verifiqué en mi propia terminal que la suite pasaba (28→29 tests de backend, 11→20 de
+frontend) y en GitHub que las corridas reales de Actions daban lo mismo que local antes de mergear
+cada PR — no di por buena ninguna corrida que no viera yo mismo en verde.
+
+### 10. Guía rápida para la defensa: dónde mostrar cada cosa
+
+- **[PR #22](https://github.com/lucasrodrich/ingsoft3-tp01/pull/22)** — la suite completa (9 tests
+  de backend + ampliación de frontend), `.coveragerc`/`vite.config.js` con los umbrales, y las dos
+  etapas `test` de los Dockerfiles + `ci.yml` extendido. Corrida verde:
+  [36478866512](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/36478866512) — el Summary
+  de cada job tiene la tabla de coverage completa, sin descargar nada.
+- **[PR #23](https://github.com/lucasrodrich/ingsoft3-tp01/pull/23)** — rojo→tests→verde→merge. Ver
+  la pestaña *Commits* (dos commits: el que rompe, el que arregla) y las dos corridas de Actions
+  linkeadas en §6.
+- **[PR #24](https://github.com/lucasrodrich/ingsoft3-tp01/pull/24)** — el freno vigente, abierto y
+  en rojo hasta la defensa. `mergeStateStatus: BLOCKED`.
+- **`test_mesa_delete_blocked_by_pending_activity_then_by_history_then_allowed`** en
+  `backend/tests/test_mesas_productos.py` — el ejercicio de la rama sin cubrir (§5).
+- **`test_unit_autenticacion_con_mock.py`** — el test con mock obligatorio, con el
+  `assert_called_once_with` que lo distingue de un stub.
+- **Tag y release `v5.0.0`** — cierre del práctico, sobre el commit que agrega esta sección.

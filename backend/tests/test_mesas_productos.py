@@ -26,3 +26,26 @@ def test_category_with_products_cannot_be_deleted(client, register):
     client.post("/api/productos", json={"nombre":"Producto","precio":10,"categoriaId":cat["id"]}, headers=h)
     assert client.delete(f"/api/categorias/{cat['id']}", headers=h).status_code == 409
 
+
+def test_mesa_delete_blocked_by_pending_activity_then_by_history_then_allowed(client, register):
+    # Regla real que el reporte de coverage mostró SIN NINGÚN test: DELETE /api/mesas/{id}
+    # (app/routers/mesas.py líneas 66-74) nunca se ejecutaba en la suite.
+    _, h = register()
+    table = client.post("/api/mesas", json={"numero": 1, "capacidad": 4}, headers=h).json()
+    cat = client.get("/api/categorias", headers=h).json()[0]
+    product = client.post("/api/productos", json={"nombre": "Milanesa", "precio": 1000, "categoriaId": cat["id"]}, headers=h).json()
+    order = client.post("/api/pedidos", json={"mesaId": table["id"]}, headers=h).json()
+
+    # Con un pedido abierto: "actividad pendiente" (primer if del endpoint)
+    assert client.delete(f"/api/mesas/{table['id']}", headers=h).status_code == 409
+
+    # Cerramos el pedido: ya no hay actividad pendiente, pero sí historial (segundo if)
+    client.post(f"/api/pedidos/{order['id']}/items", json={"productoId": product["id"], "cantidad": 1}, headers=h)
+    for state in ("en_preparacion", "listo", "entregado", "cerrado"):
+        client.patch(f"/api/pedidos/{order['id']}/estado", json={"estado": state}, headers=h)
+    assert client.delete(f"/api/mesas/{table['id']}", headers=h).status_code == 409
+
+    # Una mesa sin ningún pedido ni reserva sí se puede borrar (camino de éxito, 204)
+    empty_table = client.post("/api/mesas", json={"numero": 2, "capacidad": 2}, headers=h).json()
+    assert client.delete(f"/api/mesas/{empty_table['id']}", headers=h).status_code == 204
+
