@@ -1,0 +1,14 @@
+[run]
+branch = True
+source = app
+omit =
+    app/main.py
+    app/database.py
+    app/config.py
+    app/models/*
+
+[report]
+# Umbral elegido y justificado en decisiones.md (TP5): hoy la suite mide 80.8%
+# sobre la lógica de la app; 70% deja margen real y frena una caída de verdad.
+fail_under = 70
+precision = 1
