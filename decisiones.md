@@ -577,5 +577,12 @@ cada PR — no di por buena ninguna corrida que no viera yo mismo en verde.
 
 ### Enlaces de este TP
 
-_(se completa cuando los dos entornos estén desplegados: paquetes públicos, las dos corridas de la
-cadena de publicación, y las URLs de QA y PROD)_
+- **Paquetes públicos** (`docker pull` sin credenciales, verificado con `docker logout` antes):
+  - [`ghcr.io/lucasrodrich/ingsoft3-tp01-backend`](https://github.com/lucasrodrich/ingsoft3-tp01/pkgs/container/ingsoft3-tp01-backend)
+  - [`ghcr.io/lucasrodrich/ingsoft3-tp01-frontend`](https://github.com/lucasrodrich/ingsoft3-tp01/pkgs/container/ingsoft3-tp01-frontend)
+- **La cadena de publicación** (Tarea 1):
+  - Corrida de un **Pull Request** con «Entrar al registry» salteado (pasó todo, no publicó):
+    [runs/36493411995](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/36493411995)
+  - Corrida de **`main`** donde «Construir y publicar la imagen» es el último paso de cada job:
+    [runs/36493534503](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/36493534503)
+- **URLs de QA y PROD**: _(pendiente — bloques 3-4)_
