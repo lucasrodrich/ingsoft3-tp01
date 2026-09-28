@@ -16,5 +16,5 @@ export function sugerirMesa(mesasDisponibles, cantidadPersonas) {
   if (!cantidadPersonas || cantidadPersonas <= 0) return null;
   const queAlcanzan = mesasDisponibles.filter((m) => m.capacidad >= cantidadPersonas);
   if (queAlcanzan.length === 0) return null;
-  return queAlcanzan.reduce((mejor, actual) => (actual.capacidad < mejor.capacidad ? actual : mejor));
+  return queAlcanzan.reduce((mejor, actual) => (actual.capacidad < mejor.capacidad ? actual : mejor), queAlcanzan[0]);
 }
