@@ -9,6 +9,9 @@ on:
 jobs:
   build-backend:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Qué estamos verificando
         env:
@@ -59,17 +62,30 @@ jobs:
             TestResults/backend/coverage.xml
             TestResults/backend/junit.xml
 
-      - name: Construir la imagen del backend
+      - name: Entrar al registry
+        if: github.event_name == 'push'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Construir y publicar la imagen del backend
         uses: docker/build-push-action@v7
         with:
           context: ./backend
-          push: false
-          tags: backend:ci
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          # ${{ github.repository }} ya está en minúsculas (lucasrodrich/ingsoft3-tp01);
+          # si tu usuario/repo tuviera mayúsculas, ghcr.io rechaza el push y hay que escribirlo a mano.
+          tags: ghcr.io/${{ github.repository }}-backend:sha-${{ github.sha }}
           cache-from: type=gha,scope=backend
           cache-to: type=gha,mode=max,scope=backend
 
   build-frontend:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Qué estamos verificando
         env:
@@ -117,11 +133,19 @@ jobs:
           name: coverage-report-frontend
           path: TestResults/frontend/coverage
 
-      - name: Construir la imagen del frontend
+      - name: Entrar al registry
+        if: github.event_name == 'push'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Construir y publicar la imagen del frontend
         uses: docker/build-push-action@v7
         with:
           context: ./frontend
-          push: false
-          tags: frontend:ci
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: ghcr.io/${{ github.repository }}-frontend:sha-${{ github.sha }}
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,mode=max,scope=frontend
