@@ -11,9 +11,10 @@ export default defineConfig({
       provider: "v8",
       include: ["src/utils/**", "src/api/client.js"],
       reporter: ["text", "html"],
-      // Umbral justificado en decisiones.md (TP5): hoy branches mide 66.66%
-      // (la métrica más baja); 55% deja margen real sobre las 4 métricas.
-      thresholds: { statements: 55, branches: 55, functions: 55, lines: 55 },
+      // Umbral justificado en decisiones.md (TP5): hoy branches mide 85.24%
+      // (la métrica más baja); 75% deja ~10 puntos de colchón real, mismo
+      // criterio que el umbral del backend (revisado tras crecer la suite).
+      thresholds: { statements: 75, branches: 75, functions: 75, lines: 75 },
     },
   },
 });
