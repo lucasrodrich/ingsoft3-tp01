@@ -449,10 +449,13 @@ archivo en vez de fingir que se puede excluir "a medias" un archivo mezclado.
 Elegí **55%** sobre las 4 métricas (`statements`, `branches`, `functions`, `lines`) — con la medición
 de ese momento en 66.66% de rama (la más baja), me daba ~11 puntos de colchón, el mismo criterio de
 margen que usé en el backend. La suite creció después (agregué 2 tests más sobre casos reales de
-`client.js` que no estaban probados: la respuesta exitosa y el 401 que limpia el token) y hoy mide
-85.24% de rama; dejé el umbral en 55% sin subirlo — es una decisión que no revisé, y si en la defensa
-me preguntan por qué no lo subí, la respuesta honesta es esa: lo fijé mirando el peor momento y no
-volví a tocarlo.
+`client.js` que no estaban probados: la respuesta exitosa y el 401 que limpia el token, más los tests
+de `validarCapacidadMesa`/`sugerirMesa` del PR #23) y el umbral se quedó atrás: para cuando terminé el
+TP, medía 85.24% de rama contra un umbral de 55% — casi 30 puntos de colchón, demasiado laxo para
+seguir siendo un gate exigente. Lo revisé y lo subí a **75%**: mismo criterio de ~10 puntos de margen
+que usé en el backend, aplicado sobre la medición final en vez de la del peor momento. Con 75%, un PR
+que agregue lógica nueva sin testearla lo suficiente vuelve a poder romper el build de verdad — que es
+lo que un umbral tiene que hacer.
 
 ### 5. El ejercicio de la rama sin cubrir
 
