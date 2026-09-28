@@ -21,6 +21,44 @@ jobs:
       - name: Preparar el constructor que sabe cachear
         uses: docker/setup-buildx-action@v4
 
+      - name: Construir la etapa de tests
+        uses: docker/build-push-action@v7
+        with:
+          context: ./backend
+          target: test
+          load: true
+          push: false
+          tags: backend-test:ci
+          cache-from: type=gha,scope=backend-test
+          cache-to: type=gha,mode=max,scope=backend-test
+
+      - name: Correr los tests con coverage (backend)
+        run: |
+          set -o pipefail
+          mkdir -p TestResults/backend
+          docker run --rm -v "${{ github.workspace }}/TestResults/backend:/out" backend-test:ci \
+            | tee TestResults/backend/pytest-output.txt
+
+      - name: Resumen de coverage en el run (backend)
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### Coverage — backend"
+            echo '```'
+            tail -50 TestResults/backend/pytest-output.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publicar coverage y resultados (backend)
+        uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: coverage-report-backend
+          path: |
+            TestResults/backend/htmlcov
+            TestResults/backend/coverage.xml
+            TestResults/backend/junit.xml
+
       - name: Construir la imagen del backend
         uses: docker/build-push-action@v7
         with:
@@ -43,6 +81,41 @@ jobs:
 
       - name: Preparar el constructor que sabe cachear
         uses: docker/setup-buildx-action@v4
+
+      - name: Construir la etapa de tests
+        uses: docker/build-push-action@v7
+        with:
+          context: ./frontend
+          target: test
+          load: true
+          push: false
+          tags: frontend-test:ci
+          cache-from: type=gha,scope=frontend-test
+          cache-to: type=gha,mode=max,scope=frontend-test
+
+      - name: Correr los tests con coverage (frontend)
+        run: |
+          set -o pipefail
+          mkdir -p TestResults/frontend
+          docker run --rm -v "${{ github.workspace }}/TestResults/frontend:/out" frontend-test:ci \
+            | tee TestResults/frontend/vitest-output.txt
+
+      - name: Resumen de coverage en el run (frontend)
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### Coverage — frontend"
+            echo '```'
+            tail -20 TestResults/frontend/vitest-output.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publicar coverage y resultados (frontend)
+        uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: coverage-report-frontend
+          path: TestResults/frontend/coverage
 
       - name: Construir la imagen del frontend
         uses: docker/build-push-action@v7
