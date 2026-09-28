@@ -570,3 +570,12 @@ cada PR — no di por buena ninguna corrida que no viera yo mismo en verde.
 - **`test_unit_autenticacion_con_mock.py`** — el test con mock obligatorio, con el
   `assert_called_once_with` que lo distingue de un stub.
 - **Tag y release `v5.0.0`** — cierre del práctico, sobre el commit que agrega esta sección.
+
+## TP6 — CD: environments, aprobaciones y deployment patterns
+
+> 🚧 Sección en construcción — se completa a medida que avanza el práctico.
+
+### Enlaces de este TP
+
+_(se completa cuando los dos entornos estén desplegados: paquetes públicos, las dos corridas de la
+cadena de publicación, y las URLs de QA y PROD)_
