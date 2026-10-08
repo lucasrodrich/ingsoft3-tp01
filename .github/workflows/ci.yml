@@ -172,8 +172,8 @@ jobs:
           curl -fsS --max-time 30 "$HOOK_API&ref=$GITHUB_SHA"
           curl -fsS --max-time 30 "$HOOK_FRONT&ref=$GITHUB_SHA"
 
-      # Smoke con reintentos (cold start + build de Render). Prueba: proceso vivo
-      # (/health, que hace SELECT 1), front servido, y la BD de punta a punta:
+      # Smoke con reintentos (cold start + build de Render). Prueba: que el backend
+      # corre ESTE commit (SHA en /health, que además hace SELECT 1), front servido, y la BD de punta a punta:
       # registra/loguea un usuario de prueba y lee un endpoint autenticado.
       - name: Smoke test (espera a que QA conteste)
         shell: bash
@@ -188,7 +188,11 @@ jobs:
           REG=$(jq -nc --arg e "$SMOKE_EMAIL" --arg p "$SMOKE_PASSWORD" '{nombre:"Smoke QA",email:$e,password:$p}')
           for i in $(seq 1 30); do
             echo "Intento $i/30"
-            if curl -fsS --max-time 10 "$URL_API/health" > /dev/null \
+            # /health devuelve el SHA que corre el backend: mientras Render siga
+            # construyendo contesta el SHA viejo y reintentamos.
+            SHA_RUNNING=$(curl -fsS --max-time 10 "$URL_API/health" | jq -r .sha) || SHA_RUNNING=""
+            echo "  backend corre: ${SHA_RUNNING:-sin respuesta} (esperado: $GITHUB_SHA)"
+            if [ "$SHA_RUNNING" = "$GITHUB_SHA" ] \
                && curl -fsS --max-time 10 "$URL_FRONT/" > /dev/null; then
               # 201 la primera vez, 409 si el usuario ya existe: ambos están bien
               curl -sS --max-time 20 -o /dev/null -X POST "$URL_API/api/auth/register" \
