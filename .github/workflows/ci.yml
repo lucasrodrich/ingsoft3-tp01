@@ -155,3 +155,52 @@ jobs:
           cache-to: type=gha,mode=max,scope=frontend
           provenance: false
           sbom: false
+
+  deploy-qa:
+    runs-on: ubuntu-latest
+    needs: [build-backend, build-frontend]     # sin CI verde no hay deploy
+    if: github.ref == 'refs/heads/main'        # los PRs verifican; solo main despliega
+    environment: qa
+    steps:
+      # El `&ref=` hace que Render despliegue ESTE commit y no la punta de la rama
+      # (el hook ya trae `?key=...`, por eso va `&`).
+      - name: Disparar deploy en Render (backend + front) — del commit verificado
+        env:
+          HOOK_API: ${{ secrets.RENDER_HOOK_API_QA }}
+          HOOK_FRONT: ${{ secrets.RENDER_HOOK_FRONT_QA }}
+        run: |
+          curl -fsS --max-time 30 "$HOOK_API&ref=$GITHUB_SHA"
+          curl -fsS --max-time 30 "$HOOK_FRONT&ref=$GITHUB_SHA"
+
+      # Smoke con reintentos (cold start + build de Render). Prueba: proceso vivo
+      # (/health, que hace SELECT 1), front servido, y la BD de punta a punta:
+      # registra/loguea un usuario de prueba y lee un endpoint autenticado.
+      - name: Smoke test (espera a que QA conteste)
+        shell: bash
+        env:
+          URL_API: ${{ vars.QA_API_URL }}
+          URL_FRONT: ${{ vars.QA_FRONT_URL }}
+          SMOKE_EMAIL: smoke-qa@restoflow-smoke.dev
+          SMOKE_PASSWORD: smoke-qa-password-1
+        run: |
+          echo "Esperando a que QA esté vivo..."
+          CREDS=$(jq -nc --arg e "$SMOKE_EMAIL" --arg p "$SMOKE_PASSWORD" '{email:$e,password:$p}')
+          REG=$(jq -nc --arg e "$SMOKE_EMAIL" --arg p "$SMOKE_PASSWORD" '{nombre:"Smoke QA",email:$e,password:$p}')
+          for i in $(seq 1 30); do
+            echo "Intento $i/30"
+            if curl -fsS --max-time 10 "$URL_API/health" > /dev/null \
+               && curl -fsS --max-time 10 "$URL_FRONT/" > /dev/null; then
+              # 201 la primera vez, 409 si el usuario ya existe: ambos están bien
+              curl -sS --max-time 20 -o /dev/null -X POST "$URL_API/api/auth/register" \
+                -H 'Content-Type: application/json' -d "$REG" || true
+              TOKEN=$(curl -fsS --max-time 20 -X POST "$URL_API/api/auth/login" \
+                -H 'Content-Type: application/json' -d "$CREDS" | jq -r .token) || TOKEN=""
+              if [ -n "$TOKEN" ] && [ "$TOKEN" != "null" ] \
+                 && curl -fsS --max-time 10 -H "Authorization: Bearer $TOKEN" \
+                      "$URL_API/api/categorias" > /dev/null; then
+                echo "✅ QA responde (API + BD + front)"; exit 0
+              fi
+            fi
+            sleep 20
+          done
+          echo "❌ QA no respondió a tiempo"; exit 1
