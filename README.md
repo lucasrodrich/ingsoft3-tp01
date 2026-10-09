@@ -307,7 +307,7 @@ build-frontend ┘
 ```
 
 - **Entornos**: Render (backend y frontend, QA y PROD) + Neon (bases separadas `app_qa` y `app_prod`).
-- **Deploy**: lo dispara el pipeline con los deploy hooks de Render, guardados como secrets de cada environment.
+- **Deploy**: lo dispara el pipeline con los deploy hooks de Render, guardados como secrets de cada environment. Auto-Deploy de Render está en *Off* en los cuatro servicios, así que ningún entorno se actualiza sin pasar por el pipeline.
 - **Smoke test**: tras cada deploy, `/health` devuelve el SHA que corre el backend y el pipeline espera a que coincida con el commit desplegado, además de comprobar el front y la base (login + lectura autenticada).
 - **Release**: la versión en producción se etiqueta `v6.0.0`. El rollback se hace desde Render (*Manual Deploy* del commit anterior) y quedó medido en 35,1 s.
 - **Frontend**: la dirección del backend no está en la imagen; se lee de `BACKEND_URL` al arrancar, así que la misma imagen sirve en QA y en PROD.
