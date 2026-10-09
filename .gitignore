@@ -17,3 +17,10 @@ coverage/
 .DS_Store
 frontend/playwright-report/
 frontend/test-results/
+
+# Terraform (TP8): el estado guarda secretos (contraseñas), nunca se commitea
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfvars
+crash.log
