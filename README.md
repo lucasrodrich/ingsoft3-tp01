@@ -302,17 +302,18 @@ Cada merge a `main` con CI verde publica las imágenes en `ghcr.io` (etiquetadas
 
 ```
 build-backend ─┐
-               ├─► deploy-qa (environment qa) ─► deploy-prod (environment production, requiere aprobación)
-build-frontend ┘
+               ├─► deploy-qa ─► integracion ─► e2e ─► deploy-prod (environment production, requiere aprobación)
+build-frontend ┘   (qa)         (API de QA)   (Chromium)
 ```
 
 - **Entornos**: Render (backend y frontend, QA y PROD) + Neon (bases separadas `app_qa` y `app_prod`).
-- **Deploy**: lo dispara el pipeline con los deploy hooks de Render, guardados como secrets de cada environment. Auto-Deploy de Render está en *Off* en los cuatro servicios, así que ningún entorno se actualiza sin pasar por el pipeline.
+- **Deploy**: los cuatro servicios de Render **ejecutan las imágenes** de ghcr.io (no reconstruyen); el pipeline los despliega con los deploy hooks (guardados como secrets de cada environment) mandando `imgURL=…:sha-<commit>`, así que QA y PROD reciben exactamente la misma imagen. Auto-Deploy de Render está en *Off* en los cuatro servicios, así que ningún entorno se actualiza sin pasar por el pipeline.
 - **Smoke test**: tras cada deploy, `/health` devuelve el SHA que corre el backend y el pipeline espera a que coincida con el commit desplegado, además de comprobar el front y la base (login + lectura autenticada).
-- **Release**: la versión en producción se etiqueta `v6.0.0`. El rollback se hace desde Render (*Manual Deploy* del commit anterior) y quedó medido en 35,1 s.
+- **Pruebas como gate**: `frontend/e2e/api.spec.js` (integración, sin navegador, contra la API de QA) y `frontend/e2e/mesas.spec.js` (e2e con Playwright contra el front de QA). Si alguna falla, producción ni siquiera pide aprobación.
+- **Release**: la versión en producción se etiqueta `v7.0.0` (tag sobre el commit que está en PROD; su imagen es `sha-<ese commit>`).
 - **Frontend**: la dirección del backend no está en la imagen; se lee de `BACKEND_URL` al arrancar, así que la misma imagen sirve en QA y en PROD.
 
-Las decisiones, límites del free tier, el gate humano y el rollback medido están en `decisiones.md` (sección TP6).
+Las decisiones, límites del free tier, el gate humano, el rollback medido (TP6) y la estrategia de imágenes y pruebas (TP7) están en `decisiones.md` (secciones TP6 y TP7).
 
 ## Instalación
 
