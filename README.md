@@ -152,6 +152,8 @@ Para simplificar este proyecto académico, el frontend mantiene el token en `loc
 | `APP_TIMEZONE`                                            | Día local usado por reservas y dashboard |
 | `SERVER_HOST`, `SERVER_PORT`                              | Escucha de Uvicorn                       |
 | `CORS_ORIGINS`                                            | Orígenes permitidos separados por coma   |
+| `BACKEND_URL`, `DNS_RESOLVER`                             | Frontend (nginx): dirección de la API y resolver DNS, leídos al arrancar |
+| `RENDER_GIT_COMMIT`                                       | Lo inyecta Render; `/health` lo devuelve como `sha` (sin Render: `unknown`) |
 
 `.env` está ignorado por Git; `.env.example` sí debe versionarse.
 
@@ -292,7 +294,25 @@ El build queda en `frontend/dist/`.
 
 ## Preparación para DevOps
 
-Los tests, builds reproducibles, healthchecks e imágenes separadas permitieron sumar integración continua (ver badge arriba y `.github/workflows/ci.yml`): cada Pull Request corre `build-backend` y `build-frontend` en paralelo, con cache de capas por `scope`, y son un requisito de merge sobre `main`. Este repositorio todavía no incluye despliegues cloud ni entrega continua (CD), tal como exige el alcance académico de este bloque.
+Los tests, builds reproducibles, healthchecks e imágenes separadas permitieron sumar integración continua (ver badge arriba y `.github/workflows/ci.yml`): cada Pull Request corre `build-backend` y `build-frontend` en paralelo, con cache de capas por `scope`, y son un requisito de merge sobre `main`.
+
+## Entrega continua (CD) y entornos
+
+Cada merge a `main` con CI verde publica las imágenes en `ghcr.io` (etiquetadas `sha-<commit>`) y se despliega solo a **QA**; a **producción** solo se llega con aprobación manual.
+
+```
+build-backend ─┐
+               ├─► deploy-qa (environment qa) ─► deploy-prod (environment production, requiere aprobación)
+build-frontend ┘
+```
+
+- **Entornos**: Render (backend y frontend, QA y PROD) + Neon (bases separadas `app_qa` y `app_prod`).
+- **Deploy**: lo dispara el pipeline con los deploy hooks de Render, guardados como secrets de cada environment.
+- **Smoke test**: tras cada deploy, `/health` devuelve el SHA que corre el backend y el pipeline espera a que coincida con el commit desplegado, además de comprobar el front y la base (login + lectura autenticada).
+- **Release**: la versión en producción se etiqueta `v6.0.0`. El rollback se hace desde Render (*Manual Deploy* del commit anterior) y quedó medido en 35,1 s.
+- **Frontend**: la dirección del backend no está en la imagen; se lee de `BACKEND_URL` al arrancar, así que la misma imagen sirve en QA y en PROD.
+
+Las decisiones, límites del free tier, el gate humano y el rollback medido están en `decisiones.md` (sección TP6).
 
 ## Instalación
 
