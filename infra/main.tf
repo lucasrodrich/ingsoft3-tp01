@@ -23,6 +23,10 @@ provider "render" {} # lee RENDER_API_KEY y RENDER_OWNER_ID del entorno
 resource "neon_project" "preprod" {
   name = "restoflow-preprod"
 
+  # Neon crea los proyectos dentro de una organización y la API exige su id (sin él: "org_id is required").
+  # No es un secreto; viene de la variable de entorno TF_VAR_neon_org_id (ver variables.tf).
+  org_id = var.neon_org_id
+
   # Sin esta línea el primer apply falla: el provider pide por defecto 86400 s de historial
   # y el tope del plan gratuito es 21600 (seis horas).
   history_retention_seconds = 21600
