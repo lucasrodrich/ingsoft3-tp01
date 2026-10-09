@@ -40,10 +40,10 @@ def test_ownership_is_hidden_and_dashboard_isolated(client, register):
 
 
 def test_health(client, monkeypatch):
-    monkeypatch.delenv("RENDER_GIT_COMMIT", raising=False)
+    monkeypatch.delenv("GIT_SHA", raising=False)
     assert client.get("/health").json()=={"status":"healthy","sha":"unknown"}
 
 
 def test_health_expone_el_sha_desplegado(client, monkeypatch):
-    monkeypatch.setenv("RENDER_GIT_COMMIT", "abc123")
+    monkeypatch.setenv("GIT_SHA", "abc123")
     assert client.get("/health").json()["sha"]=="abc123"

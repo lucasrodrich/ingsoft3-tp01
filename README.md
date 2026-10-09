@@ -153,7 +153,7 @@ Para simplificar este proyecto académico, el frontend mantiene el token en `loc
 | `SERVER_HOST`, `SERVER_PORT`                              | Escucha de Uvicorn                       |
 | `CORS_ORIGINS`                                            | Orígenes permitidos separados por coma   |
 | `BACKEND_URL`, `DNS_RESOLVER`                             | Frontend (nginx): dirección de la API y resolver DNS, leídos al arrancar |
-| `RENDER_GIT_COMMIT`                                       | Lo inyecta Render; `/health` lo devuelve como `sha` (sin Render: `unknown`) |
+| `GIT_SHA`                                                 | Commit de la imagen (lo graba el pipeline con `--build-arg`); `/health` lo devuelve como `sha` (fuera del pipeline: `unknown`) |
 
 `.env` está ignorado por Git; `.env.example` sí debe versionarse.
 
