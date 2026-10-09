@@ -747,3 +747,98 @@ afirmación sobre `&ref=`), lo detecté contrastando con *Events* de Render y lo
 pasa entre el merge y PROD: los dos builds, `deploy-qa` (hooks + smoke con SHA), la pausa del environment
 `production` hasta mi aprobación, y `deploy-prod` con el mismo smoke.
 
+## TP7 — Imagen inmutable, integración y e2e como gate de promoción
+
+### Enlaces del TP7
+
+- **Paquetes públicos** (`docker pull` por la etiqueta `sha-<commit>`, sin credenciales; los dos llevan la etiqueta del commit de PROD, `sha-5233d0bc8d63f6079e1272f84be170c081daee44`):
+  - [`ghcr.io/lucasrodrich/ingsoft3-tp01-backend`](https://github.com/lucasrodrich/ingsoft3-tp01/pkgs/container/ingsoft3-tp01-backend)
+  - [`ghcr.io/lucasrodrich/ingsoft3-tp01-frontend`](https://github.com/lucasrodrich/ingsoft3-tp01/pkgs/container/ingsoft3-tp01-frontend)
+- **El par integración VERDE / e2e ROJA** que frenó una promoción:
+  - Commit que rompió la **app** (no el test): [`141c8be`](https://github.com/lucasrodrich/ingsoft3-tp01/commit/141c8be) — el formulario de mesas manda `numeroMesa` en vez de `numero`. No toca `e2e/`.
+  - La corrida: [runs/37876705321](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/37876705321) — smoke verde, integración verde, e2e roja, `deploy-prod` sin arrancar.
+  - Los dos reportes: [`playwright-report-integracion`](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/37876705321/artifacts/11592448032) (verde) y [`playwright-report-e2e`](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/37876705321/artifacts/11592936587) (roja, con captura y traza).
+- **La corrida completa en verde**, hasta PROD con aprobación: [runs/37878408979](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/37878408979) (arreglo [`5233d0b`](https://github.com/lucasrodrich/ingsoft3-tp01/commit/5233d0b)).
+- **Release `v7.0.0`** sobre el commit que *Deployments* marca en PROD: [release](https://github.com/lucasrodrich/ingsoft3-tp01/releases/tag/v7.0.0).
+- **URLs de QA y PROD** (las mismas del TP6, vivas hasta la defensa; el primer pedido tras un rato sin uso tarda 30-60 s):
+  QA [front](https://restoflow-front-qa.onrender.com) · [API](https://restoflow-api-qa.onrender.com/health) — PROD [front](https://restoflow-frontend-prod.onrender.com) · [API](https://restoflow-api-prod.onrender.com/health).
+
+> Tengo **dos** Dockerfiles (backend y frontend), así que son dos paquetes y **cuatro** servicios image-backed (api y front, QA y PROD).
+> Lo que NO queda en el repo y muestro en vivo: los *Events* de cada servicio de Render, que dicen «Triggered via Deploy Hook» y nombran la imagen `sha-<commit>` de la corrida.
+
+### 1. Build once, deploy many: qué problema del TP6 resuelve
+
+En el TP6 Render **reconstruía** mi app desde el repo en cada deploy: lo que corría en QA y PROD no era la imagen que mis tests habían aprobado, sino otra construcción del mismo commit. Lo dejé escrito como límite (§6 del TP6): con el `requirements.txt` fijado la deriva era chica, pero la imagen base y las capas podían diferir, y **no tenía forma de probar que eran iguales**. Mi ejemplo propio: el hook con `&ref=` ni siquiera desplegaba el commit que yo pedía cuando no era la punta de `main` (me di cuenta al intentar un rollback), así que "despliega este commit" tampoco era una garantía.
+
+Ahora el pipeline construye **una vez** (`build-backend`/`build-frontend`), publica `…:sha-<commit>`, y los cuatro servicios *ejecutan esa imagen*: el hook ya no dice "qué commit construir" sino "qué imagen ejecutar" (`imgURL=…:sha-<commit>`). QA y PROD reciben **exactamente la misma imagen**: se lee en los logs de la corrida `37878408979`, donde `deploy-qa` y `deploy-prod` muestran las mismas dos etiquetas `sha-5233d0bc…`.
+
+### 2. Etiquetas: `sha-<commit>` en el registry, `v7.0.0` en git
+
+- **`sha-<commit>` (40 caracteres)** identifica el *contenido publicado por un commit* y se publica una sola vez por merge a `main`. Es la que usa el pipeline para promover. La etiqueta corta (`sha-5233d0b`) **no existe** en el registry: la comprobé (404) y el hook contestaría `400 unable to fetch image`.
+- **`v7.0.0` en git** le pone nombre humano a lo que está en PROD. Del tag a la imagen en un paso: `git rev-list -n1 v7.0.0` → `5233d0bc…`, y esa es la etiqueta `sha-5233d0bc…` que está en mis dos paquetes.
+- **No publico `latest`**: es una etiqueta *móvil* —apunta a lo último que alguien subió—, y con ella "qué corre en PROD" dejaría de tener respuesta. Con `sha-<commit>` cada etiqueta apunta siempre al mismo contenido y la promoción es explícita.
+- **Qué imagen tienen configurados los servicios de Render y por qué no es ésa la que corre**: cambié la fuente de los cuatro a *Existing Image* con la etiqueta de un merge viejo (`sha-3d8cd4f…`), solo como punto de partida: Render exige una imagen para cambiar la fuente. Lo que corre lo nombra cada deploy del pipeline con su `imgURL`, así que *Settings → Image* queda desactualizado a propósito. Lo comprobé en `restoflow-api-qa`: el encabezado mostraba `sha-3d8cd4f…` pero el digest corto `c44c194` era el de `sha-3ff3c93…` (lo verifiqué contra el registry). **Peligro**: *Manual Deploy* despliega lo de *Settings*, es decir, **retrocedería** el servicio a ese commit viejo, en verde y sin avisar. No lo uso.
+- **Servicios nuevos o viejos**: cambié la fuente de los existentes (no creé nuevos), lo que conservó URL, variables y hooks. No hay servicios viejos que borrar.
+
+### 3. Del tag a la imagen que hay que desplegar
+
+`git rev-list -n1 v7.0.0` da el commit; la imagen es `ghcr.io/lucasrodrich/ingsoft3-tp01-{backend,frontend}:sha-<ese commit>`. Para volver a esa versión: disparar el hook del servicio con `--data-urlencode "imgURL=<esa imagen>"`. (El rollback del TP6 —*Manual Deploy* de un commit anterior— **ya no vale** con servicios de imagen, por lo explicado arriba. El mecanismo que lo reemplazaría, el hook con la etiqueta anterior, **no lo probé ni lo medí** en este TP.)
+
+### 4. Cómo se comprueba, desde afuera, que un entorno ejecuta mi imagen
+
+- **En *Events* de Render** (en vivo en la defensa): cada deploy dice «Triggered via Deploy Hook», nombra `…-backend:sha-<commit>` / `…-frontend:sha-<commit>` y hay una corrida que lo respalda. Un deploy manual desde el panel no diría «Triggered via Deploy Hook».
+- **Por el digest**: el encabezado de cada servicio muestra el digest corto de lo que *corre*, y lo comparo con el del registry (`curl -I` al manifest). Backend `c44c194`. Ojo con el front: el digest `70c4b6f` es el **mismo** para `sha-3d8cd4f` y `sha-3ff3c93`, porque el front no cambió entre esos commits y Docker reutilizó las capas; para el front la prueba es la etiqueta en *Events*, no el digest.
+- **Por `/health`**: el backend devuelve `"sha":"<commit>"`, que grabé **dentro de la imagen** (`ARG`/`ENV GIT_SHA` + `build-args`). Pensé en reusar `RENDER_GIT_COMMIT` del TP6, pero esa variable la inyecta Render en servicios construidos desde git; no verifiqué qué pasa en uno de imagen y preferí no depender de ella. Grabar el SHA en la imagen no depende de Render, y el smoke con SHA anduvo a la primera con este mecanismo.
+- **Qué NO alcanza a probar el smoke**: comprueba que el backend corre el SHA esperado, que el front responde y que la base funciona (login + lectura). No dice nada del **SHA del front** (solo del backend) ni de que "la app funcione" para un usuario: de hecho el smoke estuvo **verde con el front roto** (corrida `37876705321`).
+
+### 5. Qué flujos elegí y qué no puse en cada suite (pirámide)
+
+**Integración** (`frontend/e2e/api.spec.js`, sin navegador, contra la API de QA con su Postgres): (a) alta de mesa → el listado la encuentra → baja → ya no está; (b) capacidad 0 → la API rechaza con **422** y no se creó nada; (c) **elegida**: un usuario pide la mesa de otro y recibe 404. Elegí (c) porque es una regla de negocio que solo existe con autenticación + base reales (cada consulta filtra por `user_id`): un unitario con un doble de la sesión no puede ver que el filtro realmente excluye filas de otro usuario. Si se rompe, la API está filtrando mal y **cualquier cliente ve datos ajenos**.
+
+**e2e** (`frontend/e2e/mesas.spec.js`, Chromium contra el front de QA): (1) crear una mesa → aparece → eliminarla → ya no está; (2) número repetido → el usuario ve el error → sigue habiendo una sola; (3) **elegido**: iniciar sesión por la pantalla y que saluden al usuario. Elegí el login porque es el flujo que "si mañana no anda, me escriben" (sin él nadie usa nada) y además toca la base.
+
+**Lo que NO puse, y por qué**: no repito en e2e los cálculos del pedido, las transiciones de estado ni el solapamiento de reservas: ya están en los unitarios del TP5, que son mucho más rápidos y baratos de ejecutar. Y no puse en integración nada que requiera un navegador. Cada capa prueba lo que solo ella puede ver: unitario = una regla pura; integración = API + base; e2e = cómo el front usa la API.
+
+### 6. Qué dice el par verde/roja
+
+Tabla de la corrida roja (`37876705321`):
+
+| smoke | integración | e2e | Lectura |
+|---|---|---|---|
+| verde | **verde** | **roja** | La API y la base están sanas (les hablé directo, con el campo correcto, y guardaron y borraron). Lo que falló es **cómo el front usa la API**. |
+
+No hizo falta abrir el código: el par lo dice. En el reporte rojo, la traza (pestaña *Network*) muestra el `POST /api/mesas` con respuesta 422: el front mandó `numeroMesa` y la API esperaba `numero`. Si hubiera roto la **API**, la integración habría quedado roja y la e2e **no habría corrido** (su `needs` no se cumple), que es otra fila de la tabla y otra información. Tampoco lo ataja un unitario: los del front (TP5) solo cubren `utils` y `client`, no el formulario.
+
+**Qué clase de bug mi gate no ataja**: cualquier cosa fuera de los 3 flujos y 3 pruebas (por ejemplo, un error en reservas o en pedidos), y todo lo que depende de datos reales, carga, rendimiento o navegadores distintos de Chromium.
+
+### 7. Por qué la integración es la *amplia* y qué gano y pierdo
+
+Mi integración le habla a la **API de QA ya desplegada** (`API_BASE_URL`), no a una copia armada en el job con un Postgres propio (la estrecha). **Gano** que probé la misma imagen y la misma base que van a PROD, sin infraestructura extra en el job: no hay Postgres que levantar ni drivers que simular. **Pierdo** aislamiento y velocidad de diagnóstico: depende de que QA esté vivo (cold start), comparte datos con otras corridas y con la e2e, y un fallo puede ser del entorno y no del código. Lo mitigo con usuarios de prueba dedicados, números de mesa que no se repiten y limpieza comprobada en cada prueba.
+
+### 8. Cold start, tests flaky y la base compartida
+
+- **Cold start**: el smoke del job anterior ya despertó QA (reintenta 30 veces cada 20 s, ~10 min). Las suites tienen `timeout` de 60 s por test y 15 s por aserción: esperan lo que buscan en vez de `sleep` o `test.skip`. Playwright corre con `retries: 1` y 1 worker.
+- **Test flaky**: uno que a veces pasa y a veces falla *sin que cambie el código*. Es peor que no tener test porque entrena al equipo a ignorar el rojo. Mi configuración no lo esconde: el reintento puede absorber una demora suelta, pero un test que pasa recién al reintentar sale marcado como *flaky* en el reporte aunque la corrida esté verde. En mis corridas verdes no apareció ninguno.
+- **Base compartida entre las dos suites**: el QA es uno solo. Cada prueba que crea datos usa un número de mesa que no se repite (segundos desde 1970 + un azar), borra lo que creó y lo comprueba, y el `workers: 1` evita que dos pruebas corran a la vez. Si una corrida dejara basura, la vería como mesas sobrantes en la lista del usuario de prueba. Los dos usuarios de prueba (`e2e-a`, `e2e-b`) **quedan para siempre** en la base de QA, porque la app no tiene "borrar usuario".
+
+### 9. Una imagen del front para QA y PROD
+
+La dirección del backend **no está dentro de la imagen del front**: nginx la lee de las variables `BACKEND_URL` y `DNS_RESOLVER` al arrancar (plantilla `default.conf.template`). Quedan **por variable**, cada servicio con la suya: la API de su entorno y el resolver. **Quedan adentro de la imagen**: la configuración de nginx y los estáticos compilados. Por eso la misma imagen `sha-<commit>` sirve en QA y en PROD, cada una hablando con su API.
+
+### 10. Límite conocido: un solo QA y dos merges seguidos
+
+Mi QA es uno solo y lo comparten todas las corridas, y ahora además dos jobs seguidos lo usan (`integracion` y `e2e`). Si hago dos merges seguidos, la corrida B puede redesplegar QA mientras la integración o la e2e de la A lo usan: se vería como un rojo (o un verde) que no es de mi código, y lo reconocería mirando en *Events* qué imagen corre QA y a qué hora corrió el `deploy-qa` de B. Qué haría: rechazar la corrida A con el motivo (`concurrency` no la cancela porque está esperando aprobación, no en cola), no re-correr sus jobs y dejar valer la B. Regla que sigo: **un merge por vez** mientras la cadena corre. Lo mantuve en todo el TP7; **no lo probé provocándolo**. Lo que lo resolvería de verdad es un entorno por corrida, fuera del alcance de este práctico.
+
+### 11. Problemas encontrados y cómo los resolví
+
+- **El SHA del smoke con servicios de imagen**: mi smoke comparaba el `sha` de `/health` con el commit de la corrida, pero ese valor venía de una variable de Render. Antes de migrar vi el riesgo de depender de una variable que Render pone al construir desde git, y grabé el SHA dentro de la imagen (§4). No comprobé si la variable existe en un servicio de imagen: lo evité.
+- **La API contesta 422, no 400**, ante datos inválidos: lo vi al escribir la integración (el manejador de `RequestValidationError`), y la prueba (b) afirma 422.
+- **Docker Desktop apagado** al hacer el `docker pull` del checkpoint: lo reemplacé primero por una consulta anónima al manifest del registry (que prueba lo mismo) y repetí el `pull` real al encenderlo.
+- **Errores de tipeo al copiar comandos a Git Bash**: copié el `$` del prompt y omití `SHA` en una variable; el hook no llegó a ejecutarse. Pasé a pegar la etiqueta completa, sin variables.
+- **El encabezado del servicio mostraba una imagen vieja**: confundía lo *configurado* con lo que *corre* (§2). Lo resolví comparando el digest con el del registry.
+- **Dos runs del TP6 quedaron esperando aprobación** al migrar: los **rechacé antes** de tocar Render para que no se pudieran aprobar por el camino viejo (`&ref=`, que un servicio de imagen ignora). Dos de esos rechazos quedaron **sin comentario** (no se puede agregar después): son rechazos de limpieza, no el rechazo con motivo del TP6, que está en el run `37859121585`.
+- **Los reportes de Playwright vs vitest**: vitest matchea todo `*.spec.js`; excluí `e2e/**` en `vite.config.js` para que no rompa `build-frontend`.
+
+### 12. Declaración de uso de IA (TP7)
+
+Claude me guió bloque por bloque y escribió el código: el cambio de los hooks a `imgURL`, el `GIT_SHA` en la imagen, las dos suites de Playwright, los jobs `integracion` y `e2e`, el `needs: e2e` de `deploy-prod`, la rotura a propósito y el arreglo. Yo hice lo que requería mi cuenta y mis clics: cambiar la fuente de los cuatro servicios en Render, disparar el primer deploy a mano, aprobar y rechazar en GitHub, leer el reporte rojo, y verificar *Events*. **Cómo lo verifiqué**: las seis pruebas corrieron en verde primero contra mi docker compose local antes de llegar al pipeline; comprobé el SHA en `/health` de QA y PROD, y el digest contra el registry; y pedí mergear la rotura sin tocar `e2e/` para ver el rojo con mis propios ojos y diagnosticarlo con el reporte. **Dónde la IA no cubrió algo**: la guía no contempla que el smoke con SHA del TP6 dependía de una variable de Render (§4), y el límite real del smoke (verde con el front roto) solo se hizo evidente al correr la rotura en el pipeline (§4). Puedo explicar qué verifica cada test, contra qué entorno corre y qué pasa si falla.
