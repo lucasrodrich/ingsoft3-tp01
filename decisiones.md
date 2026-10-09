@@ -842,3 +842,54 @@ Mi QA es uno solo y lo comparten todas las corridas, y ahora además dos jobs se
 ### 12. Declaración de uso de IA (TP7)
 
 Claude me guió bloque por bloque y escribió el código: el cambio de los hooks a `imgURL`, el `GIT_SHA` en la imagen, las dos suites de Playwright, los jobs `integracion` y `e2e`, el `needs: e2e` de `deploy-prod`, la rotura a propósito y el arreglo. Yo hice lo que requería mi cuenta y mis clics: cambiar la fuente de los cuatro servicios en Render, disparar el primer deploy a mano, aprobar y rechazar en GitHub, leer el reporte rojo, y verificar *Events*. **Cómo lo verifiqué**: las seis pruebas corrieron en verde primero contra mi docker compose local antes de llegar al pipeline; comprobé el SHA en `/health` de QA y PROD, y el digest contra el registry; y pedí mergear la rotura sin tocar `e2e/` para ver el rojo con mis propios ojos y diagnosticarlo con el reporte. **Dónde la IA no cubrió algo**: la guía no contempla que el smoke con SHA del TP6 dependía de una variable de Render (§4), y el límite real del smoke (verde con el front roto) solo se hizo evidente al correr la rotura en el pipeline (§4). Puedo explicar qué verifica cada test, contra qué entorno corre y qué pasa si falla.
+
+## TP8 — Infraestructura como código: preprod con Terraform
+
+Release [`v8.0.0`](https://github.com/lucasrodrich/ingsoft3-tp01/releases/tag/v8.0.0) sobre el commit que deja `infra/` terminado ([PR #45](https://github.com/lucasrodrich/ingsoft3-tp01/pull/45)).
+
+### 1. Riel elegido y versiones fijadas
+
+Elegí **Terraform** (v1.16.5, instalado con `winget`) sobre el riel de siempre, **Neon + Render**, porque mis dos cuentas ya funcionaban desde el TP6 y es lo que la cátedra midió. Providers fijados por versión exacta, con el `.terraform.lock.hcl` commiteado:
+
+| Provider | Versión | Para qué |
+|---|---|---|
+| `kislerdm/neon` | 0.18.0 | proyecto, rol y base de preprod |
+| `render-oss/render` | 1.9.1 | los dos servicios de preprod |
+| `hashicorp/random` | 3.9.1 | el secreto JWT, para que no exista escrito en ningún archivo |
+
+Lo que declaré es un entorno **nuevo, `preprod`** (`infra/`: `main.tf`, `variables.tf`, `outputs.tf`). **Mi QA y mi producción no se tocan**: no los importé ni los modifiqué. Preprod corre las imágenes del TP7 (`sha-` del commit de `v7.0.0`), con su propia base en un proyecto de Neon aparte.
+
+- **Sin credenciales en el HCL**: `NEON_API_KEY`, `RENDER_API_KEY` y `RENDER_OWNER_ID` los leen los providers del entorno; el `org_id` de Neon llega por `TF_VAR_neon_org_id`; el secreto JWT lo genera `random_password`.
+- **Se derivan, no se copian**: la cadena de conexión del backend (`DATABASE_URL`) se arma con el rol, la contraseña y el host que devuelve Neon, y la `BACKEND_URL` del front sale del atributo `url` de su propia API.
+- **El estado vive en mi máquina** (`terraform.tfstate`), cubierto por el `.gitignore` junto con `.terraform/` y los `*.tfvars` desde antes del primer `apply`. En el repo viajan solo los tres `.tf`, el lockfile y el `.gitignore`.
+
+### 2. Qué comprobé (el ciclo, medido)
+
+- **Idempotencia**: tras el primer `apply`, el segundo `plan` dijo *No changes*.
+- **El estado por dentro**: encontré la contraseña del rol en texto plano en `terraform.tfstate`; por eso el estado no se commitea y por eso su pérdida o filtración importan.
+- **`destroy → apply`**: el `destroy` borró 6 recursos y el `apply` los recreó. Con QA y PROD intactos: sus `/health` dieron el mismo `sha` antes y después. El orden del `destroy` se vio **en la ejecución**, no en el plan (que lista alfabéticamente): front → api → base y secreto → rol → proyecto, el inverso de la creación, deducido del grafo de dependencias.
+- **Preprod como entorno**: el `/health` de su API devuelve el `sha` de la imagen, el front carga, y me registré a través del front y la API listó las categorías desde la base nueva.
+- **Algo que la guía dejaba sin medir**: al recrear, Render devolvió **la misma URL** (sin sufijo). Lo que sí cambia es la identidad de lo creado (otro proyecto de Neon y otro host), por eso la conexión se deriva y no se guarda.
+- **Drift**: borré a mano `app_preprod` y el plan lo detectó y el `apply` lo reparó; creé a mano una `base_intrusa` y el plan **no la ve**. Terraform vigila lo que declaré, no todo lo que existe.
+- **`prevent_destroy`** puesto temporalmente en la base: el `destroy` se negó, nombrando el recurso. Después saqué la línea.
+
+### 3. Límites y qué sigue siendo artesanal
+
+- Mis cuatro servicios de QA y PROD **no están en ningún plan**: un `terraform plan` limpio no dice nada sobre ellos, aunque existen y corren. Siguen creados a mano.
+- El estado local no se puede compartir: otra máquina o una corrida del pipeline no podrían comparar contra él.
+- Preprod **no está conectado al pipeline** (la extensión opcional del TP): el deploy hook de Render no sale de Terraform, y un job que le pegue a un entorno destruido pondría la cadena en rojo.
+- El plan gratuito de Render **no permite modificar** un servicio desde Terraform; por eso un cambio de preprod se hace con `destroy` + `apply` (o `-replace`), nunca con `update`.
+- Las 750 horas de Render son del **workspace**. Mis servicios de preprod quedaron en **otro workspace** que los cuatro de QA y PROD, así que no compiten por la misma cuota; igual lo destruyo al terminar cada sesión.
+
+### 4. Problemas encontrados y cómo los resolví
+
+- **Neon pedía `org_id`**: el primer `apply` falló con `org_id is required` y la guía no lo menciona (los proyectos se crean ahora dentro de una organización). Lo agregué como variable (`neon_org_id`, vía `TF_VAR_neon_org_id`) para no escribirlo en el código.
+- **El backend no usa `ConnectionStrings__Default`** (formato .NET de la guía): lee `DATABASE_URL`. Armé la URL con `postgresql+psycopg://…?sslmode=require` y `urlencode` de la contraseña, porque Neon exige SSL.
+- **`GIT_SHA` no se declara como variable del servicio**: viene grabado en la imagen (TP7) y una variable del servicio lo pisaría.
+- **Terraform no estaba en el `PATH`** al abrir una terminal ya existente tras instalarlo con `winget`; abrí una ventana nueva.
+- **Comandos en PowerShell**: `curl` es un alias de `Invoke-WebRequest` (usé `curl.exe`), y una URL armada con `$(…)` debe ir entera entre comillas; si no, PowerShell la parte en dos argumentos.
+- **No veía los servicios nuevos en Render**: estaban en otro workspace, no en el proyecto de los cuatro originales.
+
+### 5. Declaración de uso de IA (TP8)
+
+Claude me guió bloque por bloque y escribió el HCL (`main.tf`, `variables.tf`, `outputs.tf`), adaptándolo a mi app y a los cambios de Neon. Yo hice lo que requería mis cuentas y mi terminal: instalar Terraform, crear y exportar las credenciales, correr `init`, `plan`, `apply` y `destroy`, hacer los experimentos de drift y de `prevent_destroy`, y revisar la consola de Neon y el dashboard de Render. **Cómo lo verifiqué**: leí cada plan antes de aplicarlo y puedo explicar qué crea cada recurso y por qué en ese orden; comprobé el `/health` y el registro a través del front en preprod; y comparé el `/health` de QA y PROD antes y después del `destroy`. Si hay que leer un plan en voz alta en la defensa, puedo explicar qué haría cada acción.
