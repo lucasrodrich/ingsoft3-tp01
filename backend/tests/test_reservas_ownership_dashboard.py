@@ -1,4 +1,5 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 
 def test_reservation_conflicts_capacity_and_transitions(client, register):
@@ -17,7 +18,10 @@ def test_reservation_conflicts_capacity_and_transitions(client, register):
 
 def test_past_reservation_rejected(client, register):
     _,h=register();table=client.post("/api/mesas",json={"numero":1,"capacidad":4},headers=h).json()
-    response=client.post("/api/reservas",json={"nombreCliente":"Cliente","cantidadPersonas":2,"fecha":(date.today()-timedelta(days=1)).isoformat(),"hora":"20:00","mesaId":table["id"]},headers=h)
+    # "Hoy" en la zona de la app (APP_TIMEZONE), no la del sistema: el runner corre en UTC y entre
+    # 00:00 y 03:00 UTC su fecha va un dia adelante de la de Cordoba (el test fallaba a esa hora).
+    ayer=(datetime.now(ZoneInfo("America/Argentina/Cordoba")).date()-timedelta(days=1)).isoformat()
+    response=client.post("/api/reservas",json={"nombreCliente":"Cliente","cantidadPersonas":2,"fecha":ayer,"hora":"20:00","mesaId":table["id"]},headers=h)
     assert response.status_code==400
 
 
