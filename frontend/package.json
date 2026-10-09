@@ -16,6 +16,7 @@
     "vite": "latest"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.0",
     "@vitest/coverage-v8": "^5.0.2",
     "jsdom": "latest",
     "vitest": "latest"
