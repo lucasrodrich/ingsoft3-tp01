@@ -315,6 +315,23 @@ build-frontend ┘   (qa)         (API de QA)   (Chromium)
 
 Las decisiones, límites del free tier, el gate humano, el rollback medido (TP6) y la estrategia de imágenes y pruebas (TP7) están en `decisiones.md` (secciones TP6 y TP7).
 
+## Infraestructura como código (preprod)
+
+`infra/` declara con Terraform un tercer entorno, **preprod** (base en Neon + dos servicios en Render corriendo las imágenes del TP7), que no toca QA ni producción y que nace y muere con un comando:
+
+```powershell
+# credenciales: variables de entorno, nunca en el código
+$env:NEON_API_KEY = "…"; $env:RENDER_API_KEY = "rnd_…"; $env:RENDER_OWNER_ID = "tea-…"
+$env:TF_VAR_neon_org_id = "org-…"
+cd infra
+terraform init
+terraform apply      # crea preprod
+terraform output     # api_url y front_url
+terraform destroy    # lo destruye (hacerlo al terminar: las 750 horas de Render son del workspace)
+```
+
+El estado (`terraform.tfstate`) vive en la máquina de quien aplica y está en el `.gitignore`: guarda contraseñas. Ver `decisiones.md` (sección TP8).
+
 ## Instalación
 
 git clone https://github.com/lucasrodrich/ingsoft3-tp01.git
