@@ -78,6 +78,9 @@ jobs:
           # ${{ github.repository }} ya está en minúsculas (lucasrodrich/ingsoft3-tp01);
           # si tu usuario/repo tuviera mayúsculas, ghcr.io rechaza el push y hay que escribirlo a mano.
           tags: ghcr.io/${{ github.repository }}-backend:sha-${{ github.sha }}
+          # El SHA viaja DENTRO de la imagen: /health lo devuelve y el smoke lo compara. Con Render
+          # ejecutando una imagen, RENDER_GIT_COMMIT ya no existe (no hay commit que construir).
+          build-args: GIT_SHA=${{ github.sha }}
           cache-from: type=gha,scope=backend
           cache-to: type=gha,mode=max,scope=backend
           # provenance/sbom necesitan permisos extra (attestations: write / id-token: write)
@@ -162,15 +165,19 @@ jobs:
     if: github.ref == 'refs/heads/main'        # los PRs verifican; solo main despliega
     environment: qa
     steps:
-      # El `&ref=` hace que Render despliegue ESTE commit y no la punta de la rama
-      # (el hook ya trae `?key=...`, por eso va `&`).
-      - name: Disparar deploy en Render (backend + front) — del commit verificado
+      # El hook ya no dice "qué commit construir" sino "qué IMAGEN ejecutar": la que los jobs
+      # build-* publicaron para este commit. --get --data-urlencode agrega `imgURL` como un
+      # parámetro más (el hook ya trae `?key=...`) y le codifica los ':' y '/'. La URL del hook va
+      # ÚLTIMA: es el único argumento suelto, y --data-urlencode se lleva el valor que tiene al lado.
+      - name: Desplegar en QA la IMAGEN del commit (backend + front)
         env:
           HOOK_API: ${{ secrets.RENDER_HOOK_API_QA }}
           HOOK_FRONT: ${{ secrets.RENDER_HOOK_FRONT_QA }}
         run: |
-          curl -fsS --max-time 30 "$HOOK_API&ref=$GITHUB_SHA"
-          curl -fsS --max-time 30 "$HOOK_FRONT&ref=$GITHUB_SHA"
+          IMG_API="ghcr.io/${{ github.repository }}-backend:sha-${{ github.sha }}"
+          IMG_FRONT="ghcr.io/${{ github.repository }}-frontend:sha-${{ github.sha }}"
+          curl -fsS --max-time 30 --get --data-urlencode "imgURL=$IMG_API" "$HOOK_API"
+          curl -fsS --max-time 30 --get --data-urlencode "imgURL=$IMG_FRONT" "$HOOK_FRONT"
 
       # Smoke con reintentos (cold start + build de Render). Prueba: que el backend
       # corre ESTE commit (SHA en /health, que además hace SELECT 1), front servido, y la BD de punta a punta:
@@ -220,14 +227,17 @@ jobs:
       group: deploy-prod
       cancel-in-progress: false
     steps:
-      # Mismo mecanismo que QA: el `&ref=` fija el commit exacto que se aprobó.
-      - name: Disparar deploy en Render (backend + front) — del commit aprobado
+      # Mismo mecanismo que QA, con las mismas dos imágenes sha-<commit> (build once, deploy many):
+      # a PROD llega exactamente lo que se publicó y pasó por QA, sin reconstruir nada.
+      - name: Desplegar en PROD la IMAGEN aprobada (backend + front)
         env:
           HOOK_API: ${{ secrets.RENDER_HOOK_API_PROD }}
           HOOK_FRONT: ${{ secrets.RENDER_HOOK_FRONT_PROD }}
         run: |
-          curl -fsS --max-time 30 "$HOOK_API&ref=$GITHUB_SHA"
-          curl -fsS --max-time 30 "$HOOK_FRONT&ref=$GITHUB_SHA"
+          IMG_API="ghcr.io/${{ github.repository }}-backend:sha-${{ github.sha }}"
+          IMG_FRONT="ghcr.io/${{ github.repository }}-frontend:sha-${{ github.sha }}"
+          curl -fsS --max-time 30 --get --data-urlencode "imgURL=$IMG_API" "$HOOK_API"
+          curl -fsS --max-time 30 --get --data-urlencode "imgURL=$IMG_FRONT" "$HOOK_FRONT"
 
       # Mismo smoke que QA (SHA en /health + front + login + endpoint con BD), contra PROD.
       # Usa un usuario de prueba propio de PROD: la base app_prod es distinta de app_qa.

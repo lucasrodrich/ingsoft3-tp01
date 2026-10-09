@@ -22,6 +22,10 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 COPY --from=build /install /usr/local
 COPY app ./app
+# Commit que produjo esta imagen (lo pasa el pipeline con --build-arg). Va al final para no
+# invalidar el cache de las capas de arriba; /health lo devuelve como `sha`.
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
 EXPOSE 8080
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
 
