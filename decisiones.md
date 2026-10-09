@@ -727,6 +727,14 @@ esquema, volver al commit anterior no lo revierte; haría falta restaurar la bas
   `7059c3c` estaba en `29a99b5`). Lo vi en *Events*.
 - **El botón Rollback nativo de Render no estaba disponible** para mí; por eso el camino manual.
 - **`curl` en PowerShell** es un alias de `Invoke-WebRequest`; usé `curl.exe`.
+- **Un test que fallaba según la hora del día** (#36): al mergear `decisiones.md`, `build-backend` falló en
+  `test_past_reservation_rejected` (devolvía 201 en vez de 400) en un PR que sólo tocaba documentación. La
+  causa: el test calculaba "ayer" con `date.today()`, que usa la zona del sistema (UTC en el runner),
+  mientras la app valida contra `America/Argentina/Cordoba` (UTC-3). Entre las 00:00 y las 03:00 UTC la
+  fecha del runner va un día adelante de la de Córdoba, así que "ayer" era hoy para la app y la reserva se
+  aceptaba. Estaba latente desde el TP5 y nunca lo había visto porque corría el CI de día. Lo arreglé
+  calculando la fecha del test en la misma zona que la app, y el CI del PR del arreglo pasó a las 01:42
+  UTC, dentro de la ventana en la que fallaba. No cambié la lógica de la app, sólo el test.
 
 ### 10. Declaración de uso de IA (TP6)
 
