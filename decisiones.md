@@ -573,8 +573,6 @@ cada PR — no di por buena ninguna corrida que no viera yo mismo en verde.
 
 ## TP6 — CD: environments, aprobaciones y deployment patterns
 
-> 🚧 Sección en construcción — se completa a medida que avanza el práctico.
-
 ### Enlaces de este TP
 
 - **Paquetes públicos** (`docker pull` sin credenciales, verificado con `docker logout` antes):
@@ -585,4 +583,159 @@ cada PR — no di por buena ninguna corrida que no viera yo mismo en verde.
     [runs/36493411995](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/36493411995)
   - Corrida de **`main`** donde «Construir y publicar la imagen» es el último paso de cada job:
     [runs/36493534503](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/36493534503)
-- **URLs de QA y PROD**: _(pendiente — bloques 3-4)_
+- **URLs de QA y PROD** (vivas hasta la defensa; el primer pedido tras un rato sin uso tarda 30-60 s por el sleep de Render):
+  - QA: [front](https://restoflow-front-qa.onrender.com) · [API `/health`](https://restoflow-api-qa.onrender.com/health)
+  - PROD: [front](https://restoflow-frontend-prod.onrender.com) · [API `/health`](https://restoflow-api-prod.onrender.com/health) — `/health` devuelve el SHA que corre.
+- **La corrida del gate** (rechazo y aprobación, mismo run):
+  [runs/37859121585](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/37859121585) — el intento 1 fue
+  **rechazado** con motivo escrito; el intento 2 (re-run del job) fue **aprobado** y desplegó `7059c3c`.
+- **Tag `v6.0.0`** sobre `7059c3c`, el commit que quedó en PROD: [tag](https://github.com/lucasrodrich/ingsoft3-tp01/releases/tag/v6.0.0).
+
+### 1. Continuous Delivery, no Continuous Deployment
+
+Implementé **Continuous Delivery**: cada merge a `main` llega solo a QA, pero a PROD sólo se llega con
+una aprobación humana. Continuous Deployment sería sacar ese gate y que PROD se actualizara con cada
+merge verde. Para esta app no lo haría: no tengo métricas de error ni alertas (§8), así que no hay
+nada que detecte automáticamente un deploy malo, y el humano que aprueba es hoy el único control
+posterior a los tests. Lo que me faltaría para la tercera es justamente eso: observabilidad que
+reemplace el criterio de la persona.
+
+### 2. Por qué publico sólo con la verificación en verde
+
+El registry es confiable porque se encadenan tres controles: nada entra a `main` sin CI verde, sólo
+`main` publica, y publicar es el último paso del job que corre los tests. Si se publicara igual, el tag
+`sha-<commit>` dejaría de significar "esta imagen pasó los tests". Lo que esta cadena **no** garantiza:
+un `docker push` hecho a mano con mis credenciales entraría igual.
+
+### 3. El diseño de la cadena y el alcance de cada secret
+
+```
+build-backend ─┐
+               ├─► deploy-qa (environment: qa) ─► deploy-prod (environment: production, requiere aprobación)
+build-frontend ┘
+```
+
+- `needs` fuerza el orden: sin los dos builds en verde no hay deploy a QA, y sin QA verde no se ofrece PROD.
+- `if: github.ref == 'refs/heads/main'` en ambos jobs de deploy: los PRs verifican, sólo `main` despliega.
+- Los hooks de Render son **secrets del environment**: `RENDER_HOOK_*_QA` sólo los ve `deploy-qa`;
+  `RENDER_HOOK_*_PROD` viven en `production`, así que **ningún job los lee hasta que el revisor aprueba**.
+  Si estuvieran a nivel repo, cualquier workflow (incluido uno de un PR) podría desplegar a producción.
+- Las URLs (`QA_*_URL`, `PROD_*_URL`) son *variables* del environment, no secrets: no son sensibles.
+- El hook lleva `&ref=$GITHUB_SHA` para pedirle a Render el commit del pipeline y no "lo último de la rama"
+  (ver la limitación de `&ref=` en §9).
+- `concurrency: deploy-prod` con `cancel-in-progress: false`: nunca dos deploys a PROD a la vez, y uno
+  en curso no se corta a la mitad. No resuelve dos aprobaciones pendientes juntas; ahí hay que rechazar
+  la vieja a mano. `deploy-qa` no tiene `concurrency`: **no probé** qué pasa con dos merges seguidos
+  (el smoke del primero podría no ver nunca su SHA si el segundo lo pisa). Es una limitación abierta.
+
+### 4. Qué mira el aprobador antes de aprobar
+
+> _Borrador: ajustalo a lo que de verdad mirás._
+
+1. Que `deploy-qa` esté en verde **y** que su log muestre que QA corre el mismo SHA que se va a promover.
+2. Que el commit sea el esperado: el SHA del run / pestaña *Deployments*, no la punta de `main` de memoria.
+3. Que no haya otro deploy a PROD pendiente de aprobación.
+
+Mi rechazo real: *"No despliego a producción hasta haber medido el tiempo de rollback; todavía no lo
+tengo documentado."* Rechacé porque no tenía un plan de vuelta atrás medido, no por el código.
+
+**Qué no puede ver el aprobador**: el botón sólo muestra que QA pasó el smoke, no si la app anda bien
+para un usuario, ni errores, ni latencia, ni qué cambió en la base. Por eso la aprobación hoy es más un
+trámite informado que una verificación independiente.
+
+### 5. La letra chica del free tier y cómo la maneja el pipeline
+
+- **Sleep por inactividad**: Render duerme los servicios gratis y el primer pedido tarda 30-60 s. En los
+  logs se ve: el intento 1 del smoke dio timeout o "sin respuesta" en QA y en PROD. Por eso el smoke
+  reintenta 30 veces cada 20 s (~10 min).
+- **Build en cada deploy**: Render reconstruye el servicio; en mis corridas tardó alrededor de 1 minuto
+  (35 s en el rollback medido). Es corto, pero consume minutos de build del plan.
+- **Neon**: dos bases (`app_qa`, `app_prod`) en el mismo proyecto, separadas de verdad: lo que creé en QA
+  no apareció en PROD.
+- **Demos**: antes de mostrar algo abro `/health` para despertar el servicio.
+
+### 6. Lo que pierdo porque Render reconstruye desde el repo
+
+Los servicios se construyen desde el repo (Root Directory `backend`/`frontend`), no usando la imagen
+publicada en ghcr.io. Pierdo "construir una vez, desplegar el mismo artefacto": lo que corre en PROD no
+es byte a byte lo que pasó los tests, sino una reconstrucción del mismo commit. Los pins de
+`requirements.txt` reducen la deriva, pero la imagen base y las capas pueden diferir. Mitigaciones:
+el deploy pide el commit (`&ref=`) y el smoke verifica el SHA. Con un registry de punta a punta
+desplegaría por **digest** de la imagen que ya pasó los tests.
+
+**Qué quedó por variable y qué dentro de la imagen del front**: la dirección del backend
+(`BACKEND_URL`) y el resolver DNS (`DNS_RESOLVER`) se leen del entorno al arrancar, en la plantilla de
+nginx (`default.conf.template`); dentro de la imagen quedan la configuración de nginx y los estáticos.
+Por eso la misma imagen sirve en QA y en PROD apuntando cada una a su API.
+
+### 7. Qué prueba mi smoke test y qué no
+
+Prueba, con reintentos: que el backend corre **este commit** (`/health` devuelve `sha` y hace un
+`SELECT 1`), que el front responde, y que la base funciona de punta a punta (registra/loguea un usuario
+de prueba y lee `/api/categorias` con token).
+
+No prueba: el SHA del **front** (sólo el del backend), ningún flujo de negocio real, ni rendimiento. Y
+deja un efecto: crea un usuario de prueba (`smoke-qa@…`, `smoke-prod@…`) en cada base, incluida la de
+PROD.
+
+**Cómo llegué a verificar el SHA**: la primera versión del smoke sólo comprobaba que algo contestara, y
+podía dar verde aunque Render siguiera sirviendo la versión vieja mientras construía (pasó en el intento 2
+del primer run, antes de que terminara el build). Agregué el `sha` a `/health`; en el run siguiente se
+ven los intentos 1-2 con `null` (versión vieja) y el 3 con el SHA nuevo.
+
+### 8. Deployment pattern para una producción real, y rollback
+
+> _Borrador: la elección es tuya; propongo blue-green y dejo el razonamiento._
+
+**Pattern: blue-green.** La app es un backend sin estado más una base; con dos entornos idénticos y un
+cambio de tráfico, el rollback es instantáneo (volver a apuntar al entorno anterior) y tengo un entorno
+real donde probar antes del switch. Canary exigiría poder partir el tráfico y medir errores por versión,
+y hoy no tengo ni balanceador ni métricas para decidir si la canary va bien. Costo: duplicar la
+infraestructura. Riesgo que no cubre: los cambios de esquema de la base, que las dos versiones comparten.
+
+**Observabilidad que me falta**: tasa de errores y latencia por versión, alertas y logs centralizados.
+Hoy sólo tengo `/health` y los logs de Render.
+
+**Plan de rollback actual** (probado una vez de verdad):
+
+1. Render → `restoflow-api-prod` → *Manual Deploy* → *Deploy a specific commit* → el commit anterior de
+   PROD (`29a99b5`).
+2. Esperar a que *Deploys* lo muestre como *Live* y verificar `/health` (sin `sha`, porque esa versión es
+   anterior al cambio).
+3. Para volver a la versión del release, repetir con `7059c3c`.
+
+**Tiempo medido: 35,1 s** según *Deploys* de Render (37,24 s con mi cronómetro). Es una reconstrucción
+desde el repo, no un cambio de artefacto, así que el número depende del build de mi servicio.
+
+Lo que el rollback de código **no** deshace: los datos. Si el deploy malo escribió filas o cambió el
+esquema, volver al commit anterior no lo revierte; haría falta restaurar la base a un punto en el tiempo
+(Neon lo permite) o tener migraciones reversibles.
+
+### 9. Problemas encontrados y cómo los resolví
+
+- **508 Loop Detected en Render** (#31): nginx reenviaba el `Host` del front y el balanceador devolvía la
+  llamada al propio front. Usé `$proxy_host`, que toma el host de `BACKEND_URL`.
+- **Imágenes en ghcr.io** (#29): hizo falta desactivar `provenance`/`sbom` en el push y habilitar el
+  acceso de Actions al paquete.
+- **El smoke daba verde con la versión vieja** (§7): lo resolví con el SHA en `/health`.
+- **`&ref=` no hace lo que yo creía.** Intenté el rollback con el hook y `&ref=<SHA anterior>`, y Render
+  redesplegó la punta (`7059c3c`) en vez del SHA pedido (lo vi en *Events*: "Triggered via Deploy Hook").
+  En el pipeline funcionaba porque `$GITHUB_SHA` coincide con la punta, así que nunca lo había probado con
+  otro commit. Consecuencia: el hook sirve para "desplegá este commit si es la punta", no para rollback;
+  para rollback uso Manual Deploy.
+- **Me equivoqué de destino del rollback**: pensé en `82190c2`, pero PROD nunca corrió ese commit (antes de
+  `7059c3c` estaba en `29a99b5`). Lo vi en *Events*.
+- **El botón Rollback nativo de Render no estaba disponible** para mí; por eso el camino manual.
+- **`curl` en PowerShell** es un alias de `Invoke-WebRequest`; usé `curl.exe`.
+
+### 10. Declaración de uso de IA (TP6)
+
+Usé Claude como tutor y ejecutor de git/gh: escribió el job `deploy-qa`, `deploy-prod`, el cambio de
+`/health` y la plantilla de nginx, y me explicó cada decisión antes de aplicarla. Yo hice lo que requería
+cuentas y clics: Neon, Render, los environments y secrets, el reviewer, el rechazo y la aprobación, y el
+rollback. Verifiqué por mi cuenta los deploys *Live* en Render, que `/health` de QA y PROD devolviera el
+SHA esperado, y los logs del smoke en Actions. Cuando la IA se equivocó (el destino del rollback, la
+afirmación sobre `&ref=`), lo detecté contrastando con *Events* de Render y lo corregí. Puedo explicar qué
+pasa entre el merge y PROD: los dos builds, `deploy-qa` (hooks + smoke con SHA), la pausa del environment
+`production` hasta mi aprobación, y `deploy-prod` con el mismo smoke.
+
