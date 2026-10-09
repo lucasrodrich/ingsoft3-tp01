@@ -216,9 +216,76 @@ jobs:
           done
           echo "❌ QA no respondió a tiempo"; exit 1
 
+  # Escalón del medio de la pirámide: le habla a la API de QA ya desplegada, con su base de verdad.
+  # Sin navegador (por eso no instala Chromium) y sin dobles. Si falla, e2e ni corre.
+  integracion:
+    runs-on: ubuntu-latest
+    needs: deploy-qa                           # QA ya ejecuta la imagen de ESTA corrida (el smoke lo comprobó)
+    if: github.ref == 'refs/heads/main'
+    environment: qa                            # solo para leer las variables QA_*_URL del environment
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Instalar dependencias (sin browser)
+        run: npm ci
+        working-directory: ./frontend
+      - name: Integración contra la API de QA
+        env:
+          API_BASE_URL: ${{ vars.QA_API_URL }}
+        run: npx playwright test e2e/api.spec.js
+        working-directory: ./frontend
+      # `!cancelled()` aquí es a propósito: el reporte importa MÁS cuando la prueba falla.
+      - name: Publicar reporte de integración
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-integracion   # distinto del de e2e: dos con el mismo nombre rompen la corrida
+          path: frontend/playwright-report
+          retention-days: 7
+
+  # La punta de la pirámide: un navegador de verdad usando el front de QA.
+  e2e:
+    runs-on: ubuntu-latest
+    needs: integracion                         # si la API está rota, no gastamos un browser en confirmarlo
+    if: github.ref == 'refs/heads/main'
+    environment: qa
+    timeout-minutes: 20                        # si algo se cuelga, el job muere en vez de esperar horas
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Instalar dependencias y Chromium
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+        working-directory: ./frontend
+      - name: e2e contra QA
+        env:
+          E2E_BASE_URL: ${{ vars.QA_FRONT_URL }}
+          API_BASE_URL: ${{ vars.QA_API_URL }}    # los specs registran/loguean al usuario de prueba por la API
+        run: npx playwright test e2e/mesas.spec.js   # SU archivo: sin esto volvería a correr la integración
+        working-directory: ./frontend
+      - name: Publicar reporte e2e
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-e2e
+          path: frontend/playwright-report
+          retention-days: 7
+
   deploy-prod:
     runs-on: ubuntu-latest
-    needs: deploy-qa                           # solo se ofrece a producción lo que ya pasó por QA
+    needs: e2e                                 # EL gate: sin integración ni e2e verdes, ni siquiera se pide aprobación
     if: github.ref == 'refs/heads/main'
     environment: production                    # required reviewer: el job queda en "Waiting" hasta que se aprueba
     # Nunca dos deploys a producción a la vez. cancel-in-progress: false -> uno en curso no se corta
