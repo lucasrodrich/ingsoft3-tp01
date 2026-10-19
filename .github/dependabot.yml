@@ -1,0 +1,31 @@
+version: 2
+updates:
+  - package-ecosystem: "pip"              # las dependencias del backend (FastAPI)
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "npm"              # las del frontend (React/Vite)
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "github-actions"   # las actions del pipeline también son dependencias
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker"           # imagenes base de los Dockerfile
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "terraform"        # providers de infra/ (TP8)
+    directory: "/infra"
+    schedule:
+      interval: "weekly"
