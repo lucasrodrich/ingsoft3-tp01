@@ -161,6 +161,7 @@ jobs:
 
   deploy-qa:
     runs-on: ubuntu-latest
+    permissions: {}   # solo hace curl a los hooks de Render: no usa el GITHUB_TOKEN
     needs: [build-backend, build-frontend]     # sin CI verde no hay deploy
     if: github.ref == 'refs/heads/main'        # los PRs verifican; solo main despliega
     environment: qa
@@ -220,6 +221,8 @@ jobs:
   # Sin navegador (por eso no instala Chromium) y sin dobles. Si falla, e2e ni corre.
   integracion:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read   # solo baja el codigo
     needs: deploy-qa                           # QA ya ejecuta la imagen de ESTA corrida (el smoke lo comprobó)
     if: github.ref == 'refs/heads/main'
     environment: qa                            # solo para leer las variables QA_*_URL del environment
@@ -252,6 +255,8 @@ jobs:
   # La punta de la pirámide: un navegador de verdad usando el front de QA.
   e2e:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read   # solo baja el codigo
     needs: integracion                         # si la API está rota, no gastamos un browser en confirmarlo
     if: github.ref == 'refs/heads/main'
     environment: qa
@@ -285,6 +290,7 @@ jobs:
 
   deploy-prod:
     runs-on: ubuntu-latest
+    permissions: {}   # solo hace curl a los hooks de Render: no usa el GITHUB_TOKEN
     needs: e2e                                 # EL gate: sin integración ni e2e verdes, ni siquiera se pide aprobación
     if: github.ref == 'refs/heads/main'
     environment: production                    # required reviewer: el job queda en "Waiting" hasta que se aprueba
