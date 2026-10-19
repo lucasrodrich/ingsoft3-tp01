@@ -7,7 +7,8 @@ from app.database import SessionLocal
 router = APIRouter(tags=["Health"])
 
 
-@router.get("/health")
+# GET y HEAD: el plan gratuito de UptimeRobot consulta con HEAD (solo cabeceras, sin cuerpo).
+@router.api_route("/health", methods=["GET", "HEAD"])
 def health():
     try:
         with SessionLocal() as db: db.execute(text("SELECT 1"))
