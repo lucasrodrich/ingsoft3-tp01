@@ -1,11 +1,11 @@
 # ---- Etapa 1: build (instala dependencias) ----
-FROM python:3.13-slim AS build
+FROM python:3.14-slim AS build
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 # ---- Etapa 2: test (pytest + tu código + tests; NO viaja a producción) ----
-FROM python:3.13-slim AS test
+FROM python:3.14-slim AS test
 WORKDIR /app
 COPY requirements.txt requirements-dev.txt ./
 RUN pip install --no-cache-dir -r requirements-dev.txt
@@ -17,7 +17,7 @@ ENTRYPOINT ["python", "-m", "pytest", "tests/", "-v", "--cov", "--cov-report=ter
             "--junitxml=/out/junit.xml"]
 
 # ---- Etapa 3: runtime (solo lo instalado + el código) ----
-FROM python:3.13-slim
+FROM python:3.14-slim
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 COPY --from=build /install /usr/local
