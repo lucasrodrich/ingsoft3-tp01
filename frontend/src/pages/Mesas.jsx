@@ -5,7 +5,7 @@ import Loading from "../components/Loading";
 
 const empty={numero:"",capacidad:"",estado:"disponible"};
 export default function Mesas(){const[items,setItems]=useState([]),[form,setForm]=useState(empty),[editing,setEditing]=useState(null),[error,setError]=useState(""),[loading,setLoading]=useState(true);
- const load=()=>mesasApi.list().then(setItems).catch(e=>setError(e.message)).finally(()=>setLoading(false));useEffect(load,[]);
+ const load=()=>mesasApi.list().then(setItems).catch(e=>setError(e.message)).finally(()=>setLoading(false));useEffect(()=>{load()},[]);
  const submit=async e=>{e.preventDefault();setError("");try{const data={numero:Number(form.numero),capacidad:Number(form.capacidad),...(editing?{estado:form.estado}:{})};editing?await mesasApi.update(editing,data):await mesasApi.create(data);setForm(empty);setEditing(null);load();}catch(e){setError(e.message)}};
  const edit=x=>{setEditing(x.id);setForm({numero:x.numero,capacidad:x.capacidad,estado:x.estado})};const remove=async x=>{if(!confirm(`¿Seguro que desea eliminar la Mesa ${x.numero}?`))return;try{await mesasApi.remove(x.id);load()}catch(e){setError(e.message)}};
  const state=async(x,value)=>{try{await mesasApi.state(x.id,value);load()}catch(e){setError(e.message)}};
