@@ -9,6 +9,7 @@
     "test": "vitest"
   },
   "dependencies": {
+    "@sentry/react": "11.8.0",
     "@vitejs/plugin-react": "latest",
     "react": "latest",
     "react-dom": "latest",
