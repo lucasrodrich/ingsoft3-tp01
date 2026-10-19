@@ -53,7 +53,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publicar coverage y resultados (backend)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
           name: coverage-report-backend
@@ -134,7 +134,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publicar coverage y resultados (frontend)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
           name: coverage-report-frontend
@@ -246,7 +246,7 @@ jobs:
       # `!cancelled()` aquí es a propósito: el reporte importa MÁS cuando la prueba falla.
       - name: Publicar reporte de integración
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report-integracion   # distinto del de e2e: dos con el mismo nombre rompen la corrida
           path: frontend/playwright-report
@@ -282,7 +282,7 @@ jobs:
         working-directory: ./frontend
       - name: Publicar reporte e2e
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report-e2e
           path: frontend/playwright-report
