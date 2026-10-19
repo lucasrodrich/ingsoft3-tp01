@@ -47,3 +47,8 @@ def test_health(client, monkeypatch):
 def test_health_expone_el_sha_desplegado(client, monkeypatch):
     monkeypatch.setenv("GIT_SHA", "abc123")
     assert client.get("/health").json()["sha"]=="abc123"
+
+
+def test_health_acepta_head(client):
+    # el monitor externo (UptimeRobot free) pregunta con HEAD: debe dar 200, no 405
+    assert client.head("/health").status_code==200
