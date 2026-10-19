@@ -46,8 +46,3 @@ for router in (health.router, auth.router, mesas.router, categorias.router, prod
                pedidos.router, reservas.router, dashboard.router):
     app.include_router(router)
 
-
-# TEMPORAL (TP9 s3.5): provoca un error para verlo llegar a Sentry. SE SACA al terminar el practico.
-@app.get("/api/falla")
-def falla():
-    raise RuntimeError("Falla de prueba del TP9")
