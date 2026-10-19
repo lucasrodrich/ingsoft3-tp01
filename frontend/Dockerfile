@@ -11,7 +11,7 @@ RUN npm run build
 FROM build AS test
 ENTRYPOINT ["npx", "vitest", "run", "--coverage", "--coverage.reportsDirectory=/out/coverage"]
 
-FROM nginx:1.27-alpine
+FROM nginx:1.31-alpine
 COPY default.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=build /app/dist /usr/share/nginx/html
 ENV BACKEND_URL=http://backend:8080 \
