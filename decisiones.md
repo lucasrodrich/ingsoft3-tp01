@@ -923,7 +923,17 @@ Detalle honesto: el `deploy-prod` de esa corrida quedó **cancelado**, porque me
 UptimeRobot (plan gratuito, HEAD cada 5 minutos) sobre `https://restoflow-api-prod.onrender.com/health`, con alerta por email.
 
 - **Antes de crearlo** probé `curl -I` y PROD contestaba **405**: FastAPI sólo atendía `GET`. Lo arreglé en [#67](https://github.com/lucasrodrich/ingsoft3-tp01/pull/67) (`api_route` con `GET` y `HEAD`, más un test) y lo llevé a PROD por el pipeline.
-- **La caída provocada**: *Suspend* de `restoflow-api-prod` en Render a las **[COMPLETAR hh:mm]**. El email de **DOWN** llegó a las **[COMPLETAR hh:mm]**, **[COMPLETAR] minutos** después. Reanudé a las **[COMPLETAR hh:mm]** y el **UP** llegó a las **[COMPLETAR hh:mm]**.
+- **Primer intento (19/10), que el monitor no vio**: suspendí `restoflow-api-prod` de 18:26 a 18:29, **3 minutos**. El monitor chequea cada 5, y la caída entró entera entre dos chequeos: no hubo DOWN y UptimeRobot no registró ningún incidente. Los únicos emails de ese día fueron el par *TEST:* que manda al crear la cuenta. Aprendí que **una caída más corta que el intervalo puede pasar sin que nadie se entere**.
+- **La caída provocada (20/10, hora local)**, mantenida hasta que llegara la alerta:
+
+  | Evento | Hora |
+  |---|---|
+  | *Suspend* en Render | 19:22 |
+  | **DOWN** (`HTTP 503`, chequeo desde Falkenstein) | **19:23:15** |
+  | *Resume* en Render | 19:24 |
+  | **UP** | **19:28:19** |
+
+  **El monitor tardó ~1 minuto en avisarme**, pero fue suerte: el chequeo cayó justo después del *Suspend*. **El peor caso con el plan gratuito es ~5 minutos**, y el primer intento muestra que una caída más corta puede no verse nunca. UptimeRobot registró **5 min 4 s** de incidente. El UP llegó 4 minutos después del *Resume*: Render tarda en arrancar el servicio, y el monitor recién lo ve en su chequeo siguiente.
 - **Sin el monitor** me habría enterado cuando un usuario se quejara (el escenario del TP: 40 minutos un sábado), o en el próximo deploy, cuando el smoke fallara.
 - **El monitor quedó pausado** al terminar: despierto cada 5 minutos mantiene el servicio sin dormir y se come las 750 horas del workspace de Render.
 
