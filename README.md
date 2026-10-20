@@ -105,12 +105,19 @@ Es un monolito deliberadamente simple: un backend, una base de datos y una SPA. 
 │   │   ├── api/ auth/ components/ pages/ utils/
 │   │   ├── App.jsx
 │   │   └── styles.css
-│   ├── tests/
+│   ├── tests/          # unitarios (vitest)
+│   ├── e2e/            # integración y e2e (Playwright, contra QA)
 │   ├── Dockerfile
-│   ├── nginx.conf
+│   ├── default.conf.template
 │   └── package.json
+├── infra/              # Terraform del entorno preprod
+├── .github/
+│   ├── workflows/ci.yml
+│   └── dependabot.yml
 ├── .env.example
 ├── docker-compose.yml
+├── decisiones.md
+├── postmortem.md
 ├── spec.md
 └── README.md
 ```
@@ -154,6 +161,7 @@ Para simplificar este proyecto académico, el frontend mantiene el token en `loc
 | `CORS_ORIGINS`                                            | Orígenes permitidos separados por coma   |
 | `BACKEND_URL`, `DNS_RESOLVER`                             | Frontend (nginx): dirección de la API y resolver DNS, leídos al arrancar |
 | `GIT_SHA`                                                 | Commit de la imagen (lo graba el pipeline con `--build-arg`); `/health` lo devuelve como `sha` (fuera del pipeline: `unknown`) |
+| `SENTRY_DSN`, `SENTRY_ENVIRONMENT`                        | Backend: adónde manda errores y tiempos Sentry (sólo en PROD); sin `SENTRY_DSN` el SDK queda apagado |
 
 `.env` está ignorado por Git; `.env.example` sí debe versionarse.
 
@@ -171,7 +179,7 @@ Sólo registro, login y health son públicos. Swagger y Redoc quedan disponibles
 | Items      | `POST /api/pedidos/{id}/items`, `PUT/DELETE /api/pedidos/{id}/items/{itemId}`                               |
 | Reservas   | `GET/POST /api/reservas`, `GET/PUT/DELETE /api/reservas/{id}`, `PATCH /api/reservas/{id}/estado`            |
 | Dashboard  | `GET /api/dashboard`                                                                                        |
-| Health     | `GET /health`                                                                                               |
+| Health     | `GET/HEAD /health`                                                                                          |
 
 Productos acepta `categoriaId`, `disponible` y `texto`; pedidos, `estado`, `mesaId`, `desde` y `hasta`; reservas, `fecha`, `desde`, `hasta`, `estado`, `mesaId` y `texto`.
 
@@ -331,6 +339,16 @@ terraform destroy    # lo destruye (hacerlo al terminar: las 750 horas de Render
 ```
 
 El estado (`terraform.tfstate`) vive en la máquina de quien aplica y está en el `.gitignore`: guarda contraseñas. Ver `decisiones.md` (sección TP8).
+
+## Seguridad y observabilidad
+
+- **Dependencias**: `.github/dependabot.yml` vigila pip, npm, GitHub Actions, las imágenes base de los Dockerfiles y los providers de Terraform. Las alertas y las *security updates* de Dependabot están activas.
+- **Código**: CodeQL (default setup) analiza Python, JavaScript y los workflows en cada PR y cada push a `main`; los resultados están en *Security → Code scanning*.
+- **Secretos**: secret scanning con push protection activo. Un push con una credencial reconocible se rechaza antes de entrar al repo.
+- **Disponibilidad**: un monitor externo (UptimeRobot) consulta el `/health` de producción con `HEAD` y avisa por email. Queda **pausado** fuera de las pruebas, para no mantener despierto el servicio gratuito de Render.
+- **Errores, demoras y uso**: Sentry en el backend (`SENTRY_DSN` por variable de entorno, sólo en PROD) y en el frontend (el DSN está en `src/main.jsx`: sólo permite enviar datos, no leerlos).
+
+Las decisiones, los números medidos y las métricas DORA están en `decisiones.md` (sección TP9). El postmortem del incidente que detectó Sentry está en [`postmortem.md`](postmortem.md).
 
 ## Instalación
 

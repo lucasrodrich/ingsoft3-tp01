@@ -893,3 +893,75 @@ Lo que declaré es un entorno **nuevo, `preprod`** (`infra/`: `main.tf`, `variab
 ### 5. Declaración de uso de IA (TP8)
 
 Claude me guió bloque por bloque y escribió el HCL (`main.tf`, `variables.tf`, `outputs.tf`), adaptándolo a mi app y a los cambios de Neon. Yo hice lo que requería mis cuentas y mi terminal: instalar Terraform, crear y exportar las credenciales, correr `init`, `plan`, `apply` y `destroy`, hacer los experimentos de drift y de `prevent_destroy`, y revisar la consola de Neon y el dashboard de Render. **Cómo lo verifiqué**: leí cada plan antes de aplicarlo y puedo explicar qué crea cada recurso y por qué en ese orden; comprobé el `/health` y el registro a través del front en preprod; y comparé el `/health` de QA y PROD antes y después del `destroy`. Si hay que leer un plan en voz alta en la defensa, puedo explicar qué haría cada acción.
+
+## TP9 — DevSecOps, observabilidad y feedback continuo
+
+Release [`v9.0.0`](https://github.com/lucasrodrich/ingsoft3-tp01/releases/tag/v9.0.0). El postmortem del incidente que encontró Sentry está en [`postmortem.md`](postmortem.md).
+
+### 1. Las tres capas, activas (y qué no mira cada una)
+
+| Capa | Qué tengo | Qué **no** mira | Qué cubre ese hueco |
+|---|---|---|---|
+| Secretos | Secret scanning + **push protection** activos (*Settings → Advanced Security*) | Secretos sin patrón conocido: mi `JWT_SECRET`, la contraseña de Postgres | `.env` gitignoreado (TP2), secrets cifrados por environment (TP4/TP6), credenciales de Terraform por el entorno (TP8) |
+| Dependencias | `.github/dependabot.yml` ([#47](https://github.com/lucasrodrich/ingsoft3-tp01/pull/47)) con **pip, npm, github-actions, docker y terraform**; alertas y *security updates* prendidas | Vulnerabilidades sin CVE publicado, y mi propio código | CodeQL y los tests |
+| Código propio | **CodeQL** default setup (Python, JS/TS y Actions), en cada PR, cada push a `main` y semanal | Lógica de negocio mal hecha que no es un patrón de seguridad; lo que pasa en ejecución | Tests (TP5), integración y e2e (TP7), Sentry |
+
+Puse cinco ecosistemas y no tres porque la imagen base de los Dockerfiles y los providers de Terraform también son código ajeno que ejecuto.
+
+**Los hallazgos de CodeQL.** El primer análisis encontró **4 alertas `actions/missing-workflow-permissions`**, una por cada job que no declaraba permisos (`deploy-qa`, `integracion`, `e2e`, `deploy-prod`). Categoría OWASP: **A01 Broken Access Control** (mínimo privilegio). ¿Explotable? En un repo personal nuevo el token es de sólo lectura por defecto, así que hoy no. Pero si alguien cambia ese default, cualquier paso de esos jobs (por ejemplo, una action de terceros comprometida) podría escribir en el repo. Lo arreglé en [#66](https://github.com/lucasrodrich/ingsoft3-tp01/pull/66): `permissions: {}` en los deploys (sólo hacen `curl` a los hooks) y `contents: read` en integración y e2e (sólo hacen checkout). Hoy hay **0 alertas abiertas**.
+
+### 2. El PR de Dependabot que mergeé, y por qué me animé
+
+[#58](https://github.com/lucasrodrich/ingsoft3-tp01/pull/58): **`react-router-dom` 7.18.2 → 7.18.4**, un **patch** en SemVer. El changelog de las dos versiones sólo dice *Updated dependencies* (`react-router` 7.18.3 y 7.18.4): no hay cambios incompatibles. Me animé porque el riesgo era bajo y, sobre todo, porque mi cadena lo prueba entera. Antes del merge, `build-frontend` corrió los tests y el umbral de cobertura. Después del merge, la corrida pasó `deploy-qa`, la integración y la **e2e en Chromium**, que inicia sesión y navega por la app, o sea, usa el router de verdad. Ese verde es lo que hace que actualizar una dependencia lleve minutos y no dé miedo.
+
+Detalle honesto: el `deploy-prod` de esa corrida quedó **cancelado**, porque mergeé otro cambio antes de aprobarlo. La versión nueva llegó a PROD con el deploy siguiente (`154171f`).
+
+**Después: las alertas de seguridad.** Prender Dependabot destapó **alertas que ya existían**: PyJWT 2.10.1 tenía una **crítica**, varias altas y medias; además había una media en pytest y altas en `undici` y `source-map-js` (transitivas del front, que vienen de `jsdom` y `postcss`). Dependabot abrió un PR por cada una (#60, #64, #65). En vez de mergear tres, que habrían sido tres cadenas QA → PROD (y mi regla del TP7 es un merge por vez), las junté en [#73](https://github.com/lucasrodrich/ingsoft3-tp01/pull/73): PyJWT 2.15.1, pytest 9.0.3 (un **major**: lo corrí local antes, 31/31) y el lockfile del front.
+
+### 3. El monitor: cuánto tardó en avisarme
+
+UptimeRobot (plan gratuito, HEAD cada 5 minutos) sobre `https://restoflow-api-prod.onrender.com/health`, con alerta por email.
+
+- **Antes de crearlo** probé `curl -I` y PROD contestaba **405**: FastAPI sólo atendía `GET`. Lo arreglé en [#67](https://github.com/lucasrodrich/ingsoft3-tp01/pull/67) (`api_route` con `GET` y `HEAD`, más un test) y lo llevé a PROD por el pipeline.
+- **La caída provocada**: *Suspend* de `restoflow-api-prod` en Render a las **[COMPLETAR hh:mm]**. El email de **DOWN** llegó a las **[COMPLETAR hh:mm]**, **[COMPLETAR] minutos** después. Reanudé a las **[COMPLETAR hh:mm]** y el **UP** llegó a las **[COMPLETAR hh:mm]**.
+- **Sin el monitor** me habría enterado cuando un usuario se quejara (el escenario del TP: 40 minutos un sábado), o en el próximo deploy, cuando el smoke fallara.
+- **El monitor quedó pausado** al terminar: despierto cada 5 minutos mantiene el servicio sin dormir y se come las 750 horas del workspace de Render.
+
+### 4. Sentry: qué falla, qué tarda y qué se usa
+
+Dos proyectos: `restoflow-back` (`sentry-sdk[fastapi]`, el DSN llega por `SENTRY_DSN` sólo en PROD; sin la variable el SDK queda apagado en local, tests y QA) y `restoflow-front` (`@sentry/react`; el DSN está escrito en `main.jsx` porque **sólo sirve para enviar** datos, no para leerlos, y de todos modos viaja en el JavaScript que baja cualquier navegador). Subió por PR en [#68](https://github.com/lucasrodrich/ingsoft3-tp01/pull/68).
+
+- **Qué falla**:
+  - El error **provocado**: `GET /api/falla`, temporal. Lo saqué en [#72](https://github.com/lucasrodrich/ingsoft3-tp01/pull/72).
+  - Uno **real** que no buscaba: `RESTOFLOW-FRONT-1`, `TypeError: l is not a function` al salir de `/mesas`, que dejaba la pantalla en blanco. Estaba en el código **desde el primer commit** (14/08) y ningún test lo veía. Lo arreglé con un test de regresión en [#69](https://github.com/lucasrodrich/ingsoft3-tp01/pull/69). Es el incidente del [postmortem](postmortem.md).
+- **Qué tarda**: lo más lento es un **`POST` visto desde el front**, con P50 297 ms, **P95 1,82 s** y 7,7 % de fallos, mientras el back contesta en ~100 ms. La diferencia está entre el navegador y el servidor. Mi hipótesis es el arranque en frío de Render o de Neon.
+- **Qué se usa**: mi operación más usada es **[COMPLETAR: operación y TPM de la tabla *Transactions*]**.
+- **Las tarjetas** que nacieron de esos datos: [#70](https://github.com/lucasrodrich/ingsoft3-tp01/issues/70) (el P95 de 1,82 s) y [#71](https://github.com/lucasrodrich/ingsoft3-tp01/issues/71) (`POST /api/reservas` con 50 % de fallos: pocos pedidos, probablemente rechazos 4xx de validación que Sentry cuenta como fallo).
+
+**Lo que Sentry me dice y el monitor no**: el monitor sólo sabe que `/health` contesta. La pantalla en blanco de Mesas tuvo `/health` en verde todo el tiempo.
+
+### 5. Mis métricas DORA (práctica)
+
+Las medí con la API de *Deployments* del environment `production` y los tiempos de las corridas.
+
+| Métrica | Valor | Cómo lo calculé |
+|---|---|---|
+| Deployment frequency | **8 deploys exitosos a PROD** entre el 08/10 y el 19/10 (4 el 08-09/10, 4 el 19/10) | deployments con estado `success` |
+| Lead time (merge → PROD) | **~5-6 min** típico: [#67](https://github.com/lucasrodrich/ingsoft3-tp01/pull/67) 4,4 min, [#69](https://github.com/lucasrodrich/ingsoft3-tp01/pull/69) 5,7 min, [#68](https://github.com/lucasrodrich/ingsoft3-tp01/pull/68) 6,1 min; el peor, [#47](https://github.com/lucasrodrich/ingsoft3-tp01/pull/47), 45 min | `mergedAt` del PR contra el `success` del deployment. De #69: 2,5 min de cadena automática y ~3 min esperando mi aprobación |
+| Change failure rate | **1 de 8** (12,5 %): el deploy de Sentry no rompió nada pero destapó un bug viejo que pidió un hotfix | La rotura a propósito del TP7 **no cuenta**: la e2e la frenó y nunca llegó a PROD |
+| Recovery time | **~15 min** desde que Sentry estuvo en PROD (21:59 UTC) hasta el arreglo en PROD (22:14 UTC). El rollback del TP6 tardó 35 s | timeline del postmortem |
+
+Por cadencia estoy en un nivel *high* (por día, no a demanda); por lead time y recuperación, en *elite*. Lo primero que mejoraría es el **lead time del peor caso**: lo domina mi aprobación manual (los 45 minutos de #47 fueron yo sin aprobar). La pieza que lo mueve es el gate humano del TP6. En un proyecto real lo reemplazaría por un canary con rollback automático por tasa de errores de Sentry.
+
+### 6. Problemas encontrados y cómo los resolví
+
+- **`/health` contestaba 405 a `HEAD`** y el monitor habría marcado *Down* con PROD viva: lo vi con `curl -I` antes de crear el monitor (§3).
+- **CodeQL en mi propio pipeline**: las 4 alertas de permisos (§1).
+- **Dependabot abrió 17 PRs de una vez** (versiones nuevas + seguridad). Analicé y mergeé uno de rutina (#58) y junté los de seguridad en uno (#73). Para que no se repita el ruido, el próximo paso sería agrupar las actualizaciones menores con `groups` en `dependabot.yml`.
+- **PyJWT 2.15 avisa con claves HMAC cortas** (`InsecureKeyLengthWarning`, menos de 32 bytes para HS256): el secreto de mis tests tenía 31; lo alargué.
+- **El arreglo #72 (sacar `/api/falla`) quedó esperando aprobación** y PROD siguió con el endpoint, que contesta 500. Lo detecté al revisar *Deployments* para las métricas DORA. Llega a PROD con la corrida de #73, y la corrida vieja la rechacé por obsoleta.
+- **Sentry encontró un bug real** que llevaba dos meses en el código (§4 y postmortem).
+
+### 7. Declaración de uso de IA (TP9)
+
+Claude me guió y escribió el código y la configuración: `dependabot.yml`, los `permissions` de los jobs, el `HEAD` de `/health`, la integración de Sentry en back y front, el diagnóstico y el arreglo del bug de Mesas, el PR #73 de seguridad, las métricas DORA (calculadas con `gh api` sobre *Deployments*) y el borrador de esta sección y del postmortem. Yo hice lo que requería mis cuentas y mis clics: prender las protecciones en *Settings*, crear los proyectos de Sentry y la variable `SENTRY_DSN` en Render, el monitor de UptimeRobot, la caída y la vuelta, aprobar los deploys a PROD y mergear. **Cómo lo verifiqué**: las protecciones las veo activas en *Security*; el `curl -I` a `/health` de PROD da 200; el error de Mesas lo reproduje con el test de regresión, que fallaba antes del arreglo; corrí local los tests del back y del front con las dependencias nuevas antes de abrir #73; y los números de DORA los contrasté con los tiempos de los jobs de una corrida. Puedo explicar qué mira y qué no mira cada pieza.
