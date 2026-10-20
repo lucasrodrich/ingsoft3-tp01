@@ -1,5 +1,5 @@
 import os
-os.environ["JWT_SECRET"] = "test-secret-with-enough-entropy"
+os.environ["JWT_SECRET"] = "test-secret-with-enough-entropy-for-hs256"
 os.environ["DATABASE_URL"] = "sqlite:///./restaurant_test.db"
 os.environ["APP_TIMEZONE"] = "America/Argentina/Cordoba"
 
