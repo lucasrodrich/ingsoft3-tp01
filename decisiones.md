@@ -1,3 +1,16 @@
+# Decisiones
+
+## Enlaces para la corrección (TP6 y TP7)
+
+Lo que vive fuera del repo o es una corrida entre muchas. El detalle está en la sección de cada TP: [Enlaces del TP6](#enlaces-de-este-tp) y [Enlaces del TP7](#enlaces-del-tp7).
+
+- **QA**: [front](https://restoflow-front-qa.onrender.com) · [API `/health`](https://restoflow-api-qa.onrender.com/health) — **PROD**: [front](https://restoflow-frontend-prod.onrender.com) · [API `/health`](https://restoflow-api-prod.onrender.com/health). Vivas hasta la defensa; `/health` devuelve el SHA que corre. El primer pedido tras un rato sin uso tarda 30-60 s.
+- **Paquetes públicos** (`docker pull` sin credenciales, etiquetas `sha-<commit>`, sin `latest`): [`ingsoft3-tp01-backend`](https://github.com/lucasrodrich/ingsoft3-tp01/pkgs/container/ingsoft3-tp01-backend) · [`ingsoft3-tp01-frontend`](https://github.com/lucasrodrich/ingsoft3-tp01/pkgs/container/ingsoft3-tp01-frontend).
+- **TP6, la cadena**: PR con «Entrar al registry» salteado [runs/36493411995](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/36493411995) · `main` publicando [runs/36493534503](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/36493534503) · el gate, rechazo y aprobación [runs/37859121585](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/37859121585).
+- **TP7, integración verde y e2e roja**: commit que rompió la app [`141c8be`](https://github.com/lucasrodrich/ingsoft3-tp01/commit/141c8be) · corrida [runs/37876705321](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/37876705321) · reportes [`playwright-report-integracion`](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/37876705321/artifacts/11592448032) (verde) y [`playwright-report-e2e`](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/37876705321/artifacts/11592936587) (roja) · la corrida completa en verde hasta PROD [runs/37878408979](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/37878408979).
+- **TP5, el freno vigente**: [PR #24](https://github.com/lucasrodrich/ingsoft3-tp01/pull/24), abierto y en rojo.
+- **Releases**: [v5.0.0](https://github.com/lucasrodrich/ingsoft3-tp01/releases/tag/v5.0.0) · [v6.0.0](https://github.com/lucasrodrich/ingsoft3-tp01/releases/tag/v6.0.0) · [v7.0.0](https://github.com/lucasrodrich/ingsoft3-tp01/releases/tag/v7.0.0) · [v8.0.0](https://github.com/lucasrodrich/ingsoft3-tp01/releases/tag/v8.0.0) · [v9.0.0](https://github.com/lucasrodrich/ingsoft3-tp01/releases/tag/v9.0.0).
+
 # Decisiones — TP1
 
 ## 1. Por qué Git no pudo resolver el conflicto solo
@@ -630,8 +643,6 @@ build-frontend ┘
 
 ### 4. Qué mira el aprobador antes de aprobar
 
-> _Borrador: ajustalo a lo que de verdad mirás._
-
 1. Que `deploy-qa` esté en verde **y** que su log muestre que QA corre el mismo SHA que se va a promover.
 2. Que el commit sea el esperado: el SHA del run / pestaña *Deployments*, no la punta de `main` de memoria.
 3. Que no haya otro deploy a PROD pendiente de aprobación.
@@ -684,8 +695,6 @@ del primer run, antes de que terminara el build). Agregué el `sha` a `/health`;
 ven los intentos 1-2 con `null` (versión vieja) y el 3 con el SHA nuevo.
 
 ### 8. Deployment pattern para una producción real, y rollback
-
-> _Borrador: la elección es tuya; propongo blue-green y dejo el razonamiento._
 
 **Pattern: blue-green.** La app es un backend sin estado más una base; con dos entornos idénticos y un
 cambio de tráfico, el rollback es instantáneo (volver a apuntar al entorno anterior) y tengo un entorno
