@@ -117,7 +117,6 @@ Es un monolito deliberadamente simple: un backend, una base de datos y una SPA. 
 ├── .env.example
 ├── docker-compose.yml
 ├── decisiones.md
-├── postmortem.md
 ├── spec.md
 └── README.md
 ```
@@ -348,7 +347,7 @@ El estado (`terraform.tfstate`) vive en la máquina de quien aplica y está en e
 - **Disponibilidad**: un monitor externo (UptimeRobot) consulta el `/health` de producción con `HEAD` y avisa por email. Queda **pausado** fuera de las pruebas, para no mantener despierto el servicio gratuito de Render.
 - **Errores, demoras y uso**: Sentry en el backend (`SENTRY_DSN` por variable de entorno, sólo en PROD) y en el frontend (el DSN está en `src/main.jsx`: sólo permite enviar datos, no leerlos).
 
-Las decisiones, los números medidos y las métricas DORA están en `decisiones.md` (sección TP9). El postmortem del incidente que detectó Sentry está en [`postmortem.md`](postmortem.md).
+Las decisiones, los números medidos, las métricas DORA y el postmortem del incidente que detectó Sentry están en `decisiones.md` (sección TP9).
 
 ## Instalación
 
