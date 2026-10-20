@@ -356,61 +356,27 @@ de seguir, en vez de asumir que algo había quedado bien solo porque un comando 
 
 ## TP5 — Calidad automatizada: tests, coverage y el umbral que frena un merge
 
-### 1. Qué lógica elegí testear y por qué
+Release [`v5.0.0`](https://github.com/lucasrodrich/ingsoft3-tp01/releases/tag/v5.0.0). Suite, umbrales y pipeline en [PR #22](https://github.com/lucasrodrich/ingsoft3-tp01/pull/22), corrida verde [36478866512](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/36478866512) (el *Summary* de cada job trae la tabla de coverage).
 
-El TP2/TP3 ya me habían dejado una suite (`test_auth.py`, `test_mesas_productos.py`,
-`test_pedidos.py`, `test_reservas_ownership_dashboard.py`) pero es una suite de **integración**: pasa
-por `TestClient` contra una base SQLite real, ejercitando la app de punta a punta. Es la base **media**
-de la pirámide (§2.1 de la guía), no la base. Lo que le faltaba a mi repo era la base de verdad: unit
-tests puros, sin tocar DB ni red, sobre la lógica que más duele si se rompe. Elegí 5 reglas:
+### 1. Qué lógica testeé y por qué
 
-- **`recalculate_order`** (`app/utils/orders.py`): el total de un pedido. Si esto se rompe, un cliente
-  paga mal — es la regla con más impacto económico directo de toda la app.
-- **`ORDER_TRANSITIONS`** (misma clase): la máquina de estados de un pedido. Un bug acá deja pedidos
-  "trabados" o permite saltarse un estado (ej. cobrar un pedido que nunca se entregó).
-- **`reservations_overlap`** (`app/utils/reservations.py`): decide si dos reservas chocan. El borde
-  exacto (120 minutos) es justo donde un `<` vs `<=` cambia el comportamiento sin que se note a simple
-  vista — el tipo de bug que un test de integración normal no atrapa porque nadie prueba el minuto
-  exacto del límite.
-- **`hash_password`/`verify_password`** (`app/auth/password.py`): si esto falla, se compromete la
-  autenticación de todos los usuarios.
-- **`get_current_user`** (`app/auth/jwt.py`): la puerta de entrada a cada endpoint protegido, y la
-  elegida para el test con mock obligatorio (§3).
+La suite que traía del TP2 era de **integración** (`TestClient` contra SQLite): la parte media de la pirámide. Me faltaba la base, unitarios puros sin base ni red, sobre lo que más duele si se rompe:
 
-Más tarde, mirando el reporte de coverage (§4), sumé una sexta: el `DELETE /api/mesas/{id}`, que
-tenía dos reglas de integridad de datos (no borrar una mesa con pedidos abiertos, no borrar una con
-historial) sin un solo test encima.
+- **`recalculate_order`** (`app/utils/orders.py`): el total del pedido. Si falla, el cliente paga mal.
+- **`ORDER_TRANSITIONS`**: la máquina de estados del pedido. Un bug deja pedidos trabados o permite cobrar uno no entregado.
+- **`reservations_overlap`**: si dos reservas chocan. El borde de 120 minutos es donde un `<` vs `<=` cambia todo sin que se note.
+- **`hash_password`/`verify_password`**: si fallan, cae la autenticación de todos.
+- **`get_current_user`** (`app/auth/jwt.py`): la puerta de cada endpoint protegido; la elegí para el mock.
 
-Los archivos nuevos son `backend/tests/test_unit_*.py` (uno por regla, con el prefijo `unit` para
-distinguirlos de la suite de integración que ya tenía) — 9 métodos de test sobre 5 reglas, más el
-método que agregué después en `test_mesas_productos.py`.
+Están en `backend/tests/test_unit_*.py`: 9 métodos sobre 5 reglas. Después sumé el `DELETE /api/mesas/{id}` (§5).
 
 ### 2. Parametrizado, caso de error y AAA
 
-`test_unit_transiciones_pedido.py` y `test_unit_solapamiento_reservas.py` usan
-`@pytest.mark.parametrize` (el `[Theory]`/`[InlineData]` de la guía): en vez de un test por dato,
-un método que corre varias veces. **Cuentan como un solo método cada uno** para el mínimo de 8 —ojo
-con esa trampa, la señala el instructivo— aunque el reporte muestre 4 resultados por el
-parametrizado de transiciones y 4 por el de reservas.
+`test_unit_transiciones_pedido.py` y `test_unit_solapamiento_reservas.py` usan `@pytest.mark.parametrize`; cada uno cuenta como **un** método aunque el reporte muestre 4 resultados. Casos de error: `test_transicion_de_pedido_no_permitida_es_rechazada` y `test_get_current_user_sin_credenciales_lanza_401_sin_consultar_la_db`. Para saber si un test vale, invertí la regla a mano (`in` por `not in`) y comprobé que se pusiera rojo. AAA marcado con comentarios cuando hay algo que armar; en los parametrizados el dato entra por parámetro y no hace falta Arrange.
 
-Caso de error: `test_transicion_de_pedido_no_permitida_es_rechazada` (un estado terminal no tiene
-salida) y `test_get_current_user_sin_credenciales_lanza_401_sin_consultar_la_db` (rechazo sin
-siquiera tocar la base). El criterio que usé para juzgar si un test "vale": si invierto la regla que
-prueba (cambié `in` por `not in` en la máquina de estados, a mano, como prueba), el test se pone en
-rojo. Lo hice antes de dar por terminado cada archivo.
+### 3. El mock, sin refactor
 
-AAA: en todos los tests nuevos separé Arrange/Act/Assert con comentarios cuando había algo que
-armar (`SimpleNamespace` para simular un pedido sin tocar la base, un doble de la sesión de DB); en
-los parametrizados no hay Arrange porque el dato entra directo por parámetro, y eso también es
-correcto según la guía (un Arrange forzado sería peor que ninguno).
-
-### 3. El mock, y por qué no tuve que refactorizar nada
-
-El ejemplo de la guía arranca con una clase que fabrica su dependencia con `new` adentro del
-constructor, y hay que sacarla para poder mockear. Mi caso fue distinto: `get_current_user` ya recibe
-la sesión de base de datos por parámetro gracias a `Depends(get_db)` de FastAPI — ya era código
-testeable de fábrica, sin que yo hiciera nada. Así que el test
-(`test_unit_autenticacion_con_mock.py`) usa directamente `unittest.mock.Mock()` para reemplazar `db`:
+`get_current_user` ya recibía la sesión por `Depends(get_db)`, así que era testeable de fábrica. En `test_unit_autenticacion_con_mock.py`:
 
 ```python
 db_doble = Mock()
@@ -419,208 +385,67 @@ resultado = get_current_user(credentials=credenciales, db=db_doble)
 db_doble.get.assert_called_once_with(Usuario, 42)
 ```
 
-Lo que lo hace un **mock** y no un **stub** es la última línea: no miro solo qué devolvió la función
-(eso sería un stub), miro **cómo** usó la dependencia — que llamó a `db.get` exactamente una vez, con
-el modelo `Usuario` y el id que venía adentro del JWT. Si mañana alguien busca por email en vez de por
-id, o llama dos veces, este test se rompe aunque el resultado final "parezca" correcto.
+La última línea es lo que lo hace **mock** y no **stub**: no sólo miro qué devolvió, verifico **cómo** usó la dependencia (una vez, con `Usuario` y el id del JWT).
 
-### 4. Coverage: el número, qué excluí, y una diferencia que no esperaba
+### 4. Coverage: umbral, métrica y qué quedó afuera
 
-**Backend** (`pytest-cov` + `.coveragerc`, `branch = True`): excluí `app/main.py`, `app/database.py`
-y `app/config.py` (arranque/config, sin reglas de negocio) y `app/models/*` (clases de datos de
-SQLAlchemy, solo columnas y relaciones, sin comportamiento). **No excluí `app/schemas/*`** a pesar de
-parecer "solo campos": tienen `@field_validator` con lógica real (normalizan nombres, validan
-formato de email, longitud de contraseña) — excluirlos hubiera sido exactamente la trampa que
-describe la guía, esconder reglas de negocio detrás de la etiqueta "son solo datos".
+- **Backend** (`pytest-cov`, `branch = True` en `.coveragerc`): umbral **70 %** (`fail_under`) sobre la métrica combinada línea+rama; medido **82,7 %**, ~12 puntos de colchón. Descarté 75-80 %: pegados a la medición, cualquier refactor chico los rompería y el equipo aprendería a ignorar el gate. **Rama pura: 55,2 %**, contra 85 % de línea pura: la combinada esconde que casi la mitad de las decisiones se ejercitan por un solo camino.
+- **Afuera de la cuenta (back)**: `main.py`, `database.py`, `config.py` (arranque) y `models/*` (sólo columnas). **No** excluí `schemas/*`: tienen validadores con lógica. Excluir **bajó** el número (84 → 80,8 %): no era para inflarlo.
+- **Frontend** (`vitest` + `coverage-v8`, `thresholds` en `vite.config.js`): cuentan `src/utils/**` y `src/api/client.js`; afuera los `.jsx` (necesitan DOM) y los wrappers de una línea, que separé de la lógica moviendo `apiFetch` a `client.js`. Umbral inicial 55 % en las 4 métricas; cuando la rama llegó a 85,24 % lo subí a **75 %** ([#26](https://github.com/lucasrodrich/ingsoft3-tp01/pull/26)) para mantener ~10 puntos de margen.
 
-Con esa exclusión, el número **bajó** de 84% a 80.8% (subió después a 82.7% con el test del §1) —
-la prueba de que excluir arranque no es hacer trampa: si fuera para inflar el número, hubiera subido,
-no bajado. `main.py`/`database.py` estaban casi al 100% y "regalaban" puntos al promedio; sacarlos
-deja el número midiendo solo lo que importa.
+### 5. El camino sin cubrir
 
-Elegí **70%** de umbral (`fail_under` en `.coveragerc`) sobre la métrica combinada que reporta
-`pytest-cov` (línea+rama), con ~12 puntos de colchón sobre mi medición real (82.7% hoy). Descarté 75%
-y 80% por ser umbrales casi pegados a la medición actual: cualquier refactor chico que no toque lógica
-de negocio los rompería, entrenando a ignorar el gate en vez de respetarlo.
-
-**Lo que no esperaba**: medido por separado, la cobertura de **rama pura** da **55.2%**, bien por
-debajo del 85.0% de **línea pura** — la métrica combinada (82.7%) esconde esa diferencia. Es la
-demostración concreta de la advertencia de la guía ("branch es la métrica más honesta, line puede
-mentirte más"): con 85% de línea podría creer que casi todo está probado, cuando en realidad casi la
-mitad de las decisiones (`if`/`?.`/`??`) del código sólo se ejercitan por un camino.
-
-**Frontend** (`vitest` + `@vitest/coverage-v8`, `thresholds` en `vite.config.js`): incluí solo
-`src/utils/**` y `src/api/client.js` — **no** los `.jsx` (necesitarían DOM para testear de verdad, y
-esta materia pide unit tests sin DOM) ni `src/api/api.js` completo. Ese último archivo mezclaba
-`apiFetch` (lógica real, ya testeada) con ~20 funciones de una sola línea (`mesasApi.create`,
-`productosApi.list`, etc.) que no tienen comportamiento propio, solo mapean un nombre a una ruta.
-En vez de excluirlas "a ojo", separé el archivo: `src/api/client.js` (la lógica, la que entra en la
-cuenta) y `src/api/api.js` (reexporta `client.js` + los wrappers sin lógica, afuera de la cuenta) —
-mismo criterio que la guía usa para `Program.cs`: mover lo que no tiene comportamiento a su propio
-archivo en vez de fingir que se puede excluir "a medias" un archivo mezclado.
-
-Elegí **55%** sobre las 4 métricas (`statements`, `branches`, `functions`, `lines`) — con la medición
-de ese momento en 66.66% de rama (la más baja), me daba ~11 puntos de colchón, el mismo criterio de
-margen que usé en el backend. La suite creció después (agregué 2 tests más sobre casos reales de
-`client.js` que no estaban probados: la respuesta exitosa y el 401 que limpia el token, más los tests
-de `validarCapacidadMesa`/`sugerirMesa` del PR #23) y el umbral se quedó atrás: para cuando terminé el
-TP, medía 85.24% de rama contra un umbral de 55% — casi 30 puntos de colchón, demasiado laxo para
-seguir siendo un gate exigente. Lo revisé y lo subí a **75%**: mismo criterio de ~10 puntos de margen
-que usé en el backend, aplicado sobre la medición final en vez de la del peor momento. Con 75%, un PR
-que agregue lógica nueva sin testearla lo suficiente vuelve a poder romper el build de verdad — que es
-lo que un umbral tiene que hacer.
-
-### 5. El ejercicio de la rama sin cubrir
-
-Mirando el reporte del backend encontré que **todo** el endpoint `DELETE /api/mesas/{id}`
-(`app/routers/mesas.py`, líneas 66-74) estaba en rojo: ni un test lo ejecutaba, ninguna de sus dos
-reglas de integridad (no borrar con pedidos abiertos, no borrar con historial) tenía nada que la
-verificara.
-
-- **Qué línea es**: `app/routers/mesas.py:69`, `if active or future:` (y también 71, el segundo `if`
-  de la misma función).
-- **Qué entrada la recorrería**: una mesa con un pedido en estado activo (para el primer `if`), y
-  luego esa misma mesa con el pedido ya cerrado pero existente (para el segundo `if`, "historial").
-- **Qué decidí**: agregarlo. Es una regla de integridad real (evita perder el historial de una mesa
-  borrándola por error) y el costo de escribirlo era bajo con la infraestructura de tests que ya
-  tenía (`client`/`register` de `conftest.py`). El test quedó en
-  `test_mesas_productos.py::test_mesa_delete_blocked_by_pending_activity_then_by_history_then_allowed`
-  y subió la cobertura de `mesas.py` de 59.4% a 78.3%.
+- **Qué línea**: `app/routers/mesas.py:69`, `if active or future:` (y el segundo `if`, línea 71) del `DELETE /api/mesas/{id}`, que no ejecutaba ningún test.
+- **Qué entrada la recorre**: una mesa con un pedido activo; después, la misma mesa con el pedido cerrado (historial).
+- **Qué decidí**: agregarlo, porque protege el historial. `test_mesa_delete_blocked_by_pending_activity_then_by_history_then_allowed` subió `mesas.py` de 59,4 % a 78,3 % ([#25](https://github.com/lucasrodrich/ingsoft3-tp01/pull/25)).
 
 ### 6. Los dos Pull Requests que prueban el freno
 
-Son dos PRs distintos, con roles distintos (la guía avisa que es el punto que más se confunde):
+- **[PR #23](https://github.com/lucasrodrich/ingsoft3-tp01/pull/23), mergeado**: agregué `validarCapacidadMesa`/`sugerirMesa` sin tests y la corrida [36480751780](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/36480751780) se puso roja en «Correr los tests con coverage (frontend)»: **rama 50,81 %** contra 55 %, con todo compilando y los tests en verde (`mergeStateStatus: BLOCKED`). Con 8 tests nuevos, [36480994825](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/36480994825) quedó verde y lo mergeé.
+- **[PR #24](https://github.com/lucasrodrich/ingsoft3-tp01/pull/24), abierto y en rojo hasta la defensa**: `calcularPropina`/`dividirCuenta` sin tests. Prueba que el freno sigue vivo.
 
-- **[PR #23](https://github.com/lucasrodrich/ingsoft3-tp01/pull/23)** — la historia completa,
-  **mergeado**. Primer commit: agregué `validarCapacidadMesa`/`sugerirMesa` (lógica real de negocio
-  para el frontend, validar que una reserva entre en la mesa elegida) **sin tests**. La corrida
-  [36480751780](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/36480751780) se puso roja
-  en el paso "Correr los tests con coverage (frontend)" —branches cayó a 50.81%, contra el 55%
-  configurado— y `gh pr view` confirmó `mergeStateStatus: BLOCKED` con el build **compilando** y el
-  resto de los tests en verde: la cobertura era la única razón. Segundo commit, misma rama: agregué
-  8 tests (parametrizado + AAA) que faltaban. La corrida
-  [36480994825](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/36480994825) quedó verde,
-  `mergeStateStatus` pasó a `CLEAN`, y mergeé.
-- **[PR #24](https://github.com/lucasrodrich/ingsoft3-tp01/pull/24)** — queda **abierto y en rojo
-  hasta la defensa**, a propósito. Agrega `calcularPropina`/`dividirCuenta`/`sugerirPorcentajePropina`
-  (otra pieza de lógica real, cálculo de propina y división de cuenta) sin tests, y **no lo arreglo**:
-  es la prueba de que el freno sigue funcionando sin que yo tenga que intervenir de nuevo cada vez.
-  `gh pr view 24` da `mergeStateStatus: BLOCKED`.
+Los required checks son los mismos del TP4 (`build-backend`, `build-frontend`): como no renombré los jobs, empezaron a frenar también por cobertura.
 
-Los dos required checks (`build-backend`, `build-frontend`) son los mismos del TP4 — no tuve que
-tocar la configuración de la rama protegida: al no renombrar los jobs, los checks que ya eran
-obligatorios automáticamente pasaron a reaccionar también a la cobertura, no solo al build.
-
-### 7. Por qué coverage alto no garantiza calidad (con mi propio ejemplo)
-
-No hizo falta inventar el ejemplo: mientras armaba `test_unit_calculo_pedido.py` escribí a propósito
-una versión mala primero, para verla en la práctica —
+### 7. Por qué coverage alto no garantiza calidad
 
 ```python
 def test_esto_no_verifica_nada():
-    recalculate_order(SimpleNamespace(items=[], total=None))  # se ejecuta... y no hay ningún Assert
+    recalculate_order(SimpleNamespace(items=[], total=None))  # se ejecuta... y no hay Assert
 ```
 
-— y coverage la cuenta igual que a un test de verdad: la línea se ejecutó, así que "está cubierta".
-Ese test no me hubiera avisado si `recalculate_order` empezara a devolver el total mal calculado. Es
-la razón de fondo por la que branch coverage (§4) me dio una sorpresa: un número alto (línea, 85%)
-puede convivir con la mitad de las decisiones del código sin verificar (rama, 55.2%) — ninguna de las
-dos métricas, por sí sola, contesta "¿mis tests comprueban algo de verdad?". Eso solo lo contesta
-mirar el test y preguntarse qué invertiría el resultado sin que ningún assert lo note.
+Coverage lo cuenta como cubierto, pero no avisaría si el total saliera mal. Lo mismo con mis números: 85 % de línea convivía con 55 % de rama. Ninguna métrica contesta si un test comprueba algo; eso se ve leyendo el test.
 
 ### 8. Problemas encontrados y cómo los resolví
 
-- **`ModuleNotFoundError: No module named 'app'` corriendo la etapa de tests en Docker.** Local usaba
-  `python -m pytest` (que agrega el directorio actual al `sys.path`); el `ENTRYPOINT` del Dockerfile
-  tenía `pytest` a secas, que no lo hace. Se resolvió cambiando el `ENTRYPOINT` a
-  `["python", "-m", "pytest", ...]`.
-- **`.dockerignore` del backend excluía `tests`** desde el TP4 (cuando la imagen no los necesitaba
-  para nada). Al agregar la etapa de tests, `COPY tests ./tests` copiaba una carpeta vacía sin ningún
-  error visible — el síntoma era "0 tests collected", no un fallo de build. Se resolvió sacando
-  `tests` del `.dockerignore`.
-- **`EBUSY: resource busy or locked, rmdir '/app/coverage'`** corriendo la etapa de tests del
-  frontend con un volumen montado directo sobre la carpeta de coverage: `vitest` intenta borrar y
-  recrear esa carpeta antes de escribir, y no se puede hacer `rmdir` sobre un punto de montaje. Se
-  resolvió montando un directorio contenedor (`/out`) y apuntando `--coverage.reportsDirectory` a una
-  subcarpeta adentro (`/out/coverage`), que sí se puede crear y borrar libremente.
-- **El `-v` de Docker no montaba nada probando local en Git Bash** (`/tmp/...` quedaba vacío del lado
-  del host aunque el contenedor decía haber escrito ahí). Es la conversión automática de rutas de
-  MSYS rompiendo el argumento `host:contenedor` por el `:` del medio. Se resolvió con
-  `MSYS_NO_PATHCONV=1` delante del `docker run` **solo para probar local** — en el runner de GitHub
-  Actions (bash de Linux nativo) el mismo `-v` del `ci.yml` anda sin ningún truco.
-- **Un `docker run | tee archivo` podía esconder un test en rojo.** Sin `set -o pipefail`, bash
-  devuelve el código de salida del último comando del pipe (`tee`, que casi siempre sale bien) y no
-  el de `docker run` — el job seguiría "verde" con la suite rota. Lo comprobé a propósito: corrí
-  `vitest` con coverage por debajo del umbral y confirmé `exit code 1` **sin** el pipe antes de
-  confiar en que `set -o pipefail` lo iba a propagar bien dentro del `ci.yml`.
+- **`No module named 'app'`** en la etapa de tests de Docker: el `ENTRYPOINT` usaba `pytest` a secas; pasé a `python -m pytest`, que agrega el directorio al `sys.path`.
+- **"0 tests collected"**: el `.dockerignore` del TP4 excluía `tests`. Lo saqué.
+- **`EBUSY ... rmdir '/app/coverage'`**: vitest no puede borrar un punto de montaje; monté `/out` y escribí en `/out/coverage`.
+- **El `-v` de Docker no montaba en Git Bash** (MSYS convierte rutas): `MSYS_NO_PATHCONV=1` sólo local; en el runner anda sin trucos.
+- **`docker run | tee` podía esconder un rojo**: sin `set -o pipefail` el pipe devuelve el código de `tee`. Lo comprobé con coverage bajo el umbral antes de confiar.
 
 ### 9. Declaración de uso de IA (TP5)
 
-Usé Claude como tutor paso a paso, bloque por bloque (suite → coverage → pipeline → gate → PRs de
-demostración → esta sección), pidiéndole que me explicara cada decisión antes de escribir código, y
-como ejecutor de los comandos de git/gh/docker en su propia terminal mientras yo confirmaba cada
-resultado en la mía. Las decisiones de fondo las tomé yo después de que me explicara el trade-off:
-elegí 70%/55% de umbral entre las opciones que me dio, decidí testear el `DELETE /api/mesas` en vez
-de descartar el ejercicio, y elegí separar `api.js`/`client.js` en vez de dejar el número de coverage
-mintiendo. Verifiqué en mi propia terminal que la suite pasaba (28→29 tests de backend, 11→20 de
-frontend) y en GitHub que las corridas reales de Actions daban lo mismo que local antes de mergear
-cada PR — no di por buena ninguna corrida que no viera yo mismo en verde.
-
-### 10. Guía rápida para la defensa: dónde mostrar cada cosa
-
-- **[PR #22](https://github.com/lucasrodrich/ingsoft3-tp01/pull/22)** — la suite completa (9 tests
-  de backend + ampliación de frontend), `.coveragerc`/`vite.config.js` con los umbrales, y las dos
-  etapas `test` de los Dockerfiles + `ci.yml` extendido. Corrida verde:
-  [36478866512](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/36478866512) — el Summary
-  de cada job tiene la tabla de coverage completa, sin descargar nada.
-- **[PR #23](https://github.com/lucasrodrich/ingsoft3-tp01/pull/23)** — rojo→tests→verde→merge. Ver
-  la pestaña *Commits* (dos commits: el que rompe, el que arregla) y las dos corridas de Actions
-  linkeadas en §6.
-- **[PR #24](https://github.com/lucasrodrich/ingsoft3-tp01/pull/24)** — el freno vigente, abierto y
-  en rojo hasta la defensa. `mergeStateStatus: BLOCKED`.
-- **`test_mesa_delete_blocked_by_pending_activity_then_by_history_then_allowed`** en
-  `backend/tests/test_mesas_productos.py` — el ejercicio de la rama sin cubrir (§5).
-- **`test_unit_autenticacion_con_mock.py`** — el test con mock obligatorio, con el
-  `assert_called_once_with` que lo distingue de un stub.
-- **Tag y release `v5.0.0`** — cierre del práctico, sobre el commit que agrega esta sección.
+Usé Claude como tutor bloque por bloque y para ejecutar git/gh/docker mientras yo confirmaba en mi terminal. Las decisiones las tomé yo después de que me explicara el trade-off: los umbrales, testear el `DELETE /api/mesas` en vez de descartar el ejercicio, y separar `api.js`/`client.js` en vez de dejar el número mintiendo. Verifiqué que la suite pasara local (28→29 tests de back, 11→20 de front) y que las corridas de Actions dieran lo mismo antes de mergear.
 
 ## TP6 — CD: environments, aprobaciones y deployment patterns
 
 ### Enlaces de este TP
 
-- **Paquetes públicos** (`docker pull` sin credenciales, verificado con `docker logout` antes):
-  - [`ghcr.io/lucasrodrich/ingsoft3-tp01-backend`](https://github.com/lucasrodrich/ingsoft3-tp01/pkgs/container/ingsoft3-tp01-backend)
-  - [`ghcr.io/lucasrodrich/ingsoft3-tp01-frontend`](https://github.com/lucasrodrich/ingsoft3-tp01/pkgs/container/ingsoft3-tp01-frontend)
-- **La cadena de publicación** (Tarea 1):
-  - Corrida de un **Pull Request** con «Entrar al registry» salteado (pasó todo, no publicó):
-    [runs/36493411995](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/36493411995)
-  - Corrida de **`main`** donde «Construir y publicar la imagen» es el último paso de cada job:
-    [runs/36493534503](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/36493534503)
-- **URLs de QA y PROD** (vivas hasta la defensa; el primer pedido tras un rato sin uso tarda 30-60 s por el sleep de Render):
-  - QA: [front](https://restoflow-front-qa.onrender.com) · [API `/health`](https://restoflow-api-qa.onrender.com/health)
-  - PROD: [front](https://restoflow-frontend-prod.onrender.com) · [API `/health`](https://restoflow-api-prod.onrender.com/health) — `/health` devuelve el SHA que corre.
-- **La corrida del gate** (rechazo y aprobación, mismo run):
-  [runs/37859121585](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/37859121585) — el intento 1 fue
-  **rechazado** con motivo escrito; el intento 2 (re-run del job) fue **aprobado** y desplegó `7059c3c`.
-- **Tag `v6.0.0`** sobre `7059c3c`, el commit que quedó en PROD: [tag](https://github.com/lucasrodrich/ingsoft3-tp01/releases/tag/v6.0.0).
+- **Paquetes públicos** (`docker pull` sin credenciales, verificado con `docker logout`): [`ingsoft3-tp01-backend`](https://github.com/lucasrodrich/ingsoft3-tp01/pkgs/container/ingsoft3-tp01-backend) · [`ingsoft3-tp01-frontend`](https://github.com/lucasrodrich/ingsoft3-tp01/pkgs/container/ingsoft3-tp01-frontend).
+- **La cadena**: PR con «Entrar al registry» salteado [runs/36493411995](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/36493411995) · `main`, con «Construir y publicar la imagen» como último paso [runs/36493534503](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/36493534503).
+- **QA**: [front](https://restoflow-front-qa.onrender.com) · [API `/health`](https://restoflow-api-qa.onrender.com/health) — **PROD**: [front](https://restoflow-frontend-prod.onrender.com) · [API `/health`](https://restoflow-api-prod.onrender.com/health). Vivas hasta la defensa; el primer pedido tras el sleep tarda 30-60 s.
+- **El gate**: [runs/37859121585](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/37859121585), intento 1 **rechazado** con motivo, intento 2 **aprobado** (desplegó `7059c3c`).
+- **Release** [`v6.0.0`](https://github.com/lucasrodrich/ingsoft3-tp01/releases/tag/v6.0.0) sobre `7059c3c`, el commit que quedó en PROD.
 
-### 1. Continuous Delivery, no Continuous Deployment
+### 1. Continuous Delivery, no Deployment
 
-Implementé **Continuous Delivery**: cada merge a `main` llega solo a QA, pero a PROD sólo se llega con
-una aprobación humana. Continuous Deployment sería sacar ese gate y que PROD se actualizara con cada
-merge verde. Para esta app no lo haría: no tengo métricas de error ni alertas (§8), así que no hay
-nada que detecte automáticamente un deploy malo, y el humano que aprueba es hoy el único control
-posterior a los tests. Lo que me faltaría para la tercera es justamente eso: observabilidad que
-reemplace el criterio de la persona.
+Cada merge a `main` llega solo a QA; a PROD, sólo con aprobación humana. Continuous Deployment sacaría ese gate, y no lo haría: no tenía métricas ni alertas que detecten un deploy malo, así que el aprobador era el único control posterior a los tests.
 
-### 2. Por qué publico sólo con la verificación en verde
+### 2. Por qué publico sólo en verde
 
-El registry es confiable porque se encadenan tres controles: nada entra a `main` sin CI verde, sólo
-`main` publica, y publicar es el último paso del job que corre los tests. Si se publicara igual, el tag
-`sha-<commit>` dejaría de significar "esta imagen pasó los tests". Lo que esta cadena **no** garantiza:
-un `docker push` hecho a mano con mis credenciales entraría igual.
+Tres controles encadenados: nada entra a `main` sin CI verde, sólo `main` publica, y publicar es el último paso del job que corre los tests. Si se publicara igual, `sha-<commit>` dejaría de significar "esta imagen pasó los tests". Lo que no cubre: un `docker push` a mano con mis credenciales.
 
-### 3. El diseño de la cadena y el alcance de cada secret
+### 3. La cadena y el alcance de cada secret
 
 ```
 build-backend ─┐
@@ -628,229 +453,126 @@ build-backend ─┐
 build-frontend ┘
 ```
 
-- `needs` fuerza el orden: sin los dos builds en verde no hay deploy a QA, y sin QA verde no se ofrece PROD.
-- `if: github.ref == 'refs/heads/main'` en ambos jobs de deploy: los PRs verifican, sólo `main` despliega.
-- Los hooks de Render son **secrets del environment**: `RENDER_HOOK_*_QA` sólo los ve `deploy-qa`;
-  `RENDER_HOOK_*_PROD` viven en `production`, así que **ningún job los lee hasta que el revisor aprueba**.
-  Si estuvieran a nivel repo, cualquier workflow (incluido uno de un PR) podría desplegar a producción.
-- Las URLs (`QA_*_URL`, `PROD_*_URL`) son *variables* del environment, no secrets: no son sensibles.
-- El hook lleva `&ref=$GITHUB_SHA` para pedirle a Render el commit del pipeline y no "lo último de la rama"
-  (ver la limitación de `&ref=` en §9).
-- `concurrency: deploy-prod` con `cancel-in-progress: false`: nunca dos deploys a PROD a la vez, y uno
-  en curso no se corta a la mitad. No resuelve dos aprobaciones pendientes juntas; ahí hay que rechazar
-  la vieja a mano. `deploy-qa` no tiene `concurrency`: **no probé** qué pasa con dos merges seguidos
-  (el smoke del primero podría no ver nunca su SHA si el segundo lo pisa). Es una limitación abierta.
+- `needs` fuerza el orden; `if: github.ref == 'refs/heads/main'` hace que los PRs sólo verifiquen.
+- Los hooks de Render son **secrets del environment**: los de PROD **no los lee ningún job hasta que el revisor aprueba**. A nivel repo, cualquier workflow (incluso uno de un PR) podría desplegar a producción. Las URLs son *variables*: no son sensibles.
+- `concurrency: deploy-prod` sin cancelar: nunca dos deploys a PROD a la vez. Dos aprobaciones pendientes se resuelven rechazando la vieja a mano.
 
-### 4. Qué mira el aprobador antes de aprobar
+### 4. Qué mira el aprobador
 
-1. Que `deploy-qa` esté en verde **y** que su log muestre que QA corre el mismo SHA que se va a promover.
-2. Que el commit sea el esperado: el SHA del run / pestaña *Deployments*, no la punta de `main` de memoria.
-3. Que no haya otro deploy a PROD pendiente de aprobación.
+1. `deploy-qa` en verde y su log mostrando que QA corre el **mismo SHA** que se promueve.
+2. Que el commit sea el esperado (*Deployments*, no la punta de `main` de memoria).
+3. Que no haya otro deploy a PROD pendiente.
 
-Mi rechazo real: *"No despliego a producción hasta haber medido el tiempo de rollback; todavía no lo
-tengo documentado."* Rechacé porque no tenía un plan de vuelta atrás medido, no por el código.
+Mi rechazo real: *"No despliego a producción hasta haber medido el tiempo de rollback"*. **Qué no ve**: si la app anda para un usuario, errores, latencia o cambios en la base. Hoy la aprobación es más un trámite informado que una verificación independiente.
 
-**Qué no puede ver el aprobador**: el botón sólo muestra que QA pasó el smoke, no si la app anda bien
-para un usuario, ni errores, ni latencia, ni qué cambió en la base. Por eso la aprobación hoy es más un
-trámite informado que una verificación independiente.
+### 5. La letra chica del free tier
 
-### 5. La letra chica del free tier y cómo la maneja el pipeline
-
-- **Sleep por inactividad**: Render duerme los servicios gratis y el primer pedido tarda 30-60 s. En los
-  logs se ve: el intento 1 del smoke dio timeout o "sin respuesta" en QA y en PROD. Por eso el smoke
-  reintenta 30 veces cada 20 s (~10 min).
-- **Build en cada deploy**: Render reconstruye el servicio; en mis corridas tardó alrededor de 1 minuto
-  (35 s en el rollback medido). Es corto, pero consume minutos de build del plan.
-- **Neon**: dos bases (`app_qa`, `app_prod`) en el mismo proyecto, separadas de verdad: lo que creé en QA
-  no apareció en PROD.
-- **Demos**: antes de mostrar algo abro `/health` para despertar el servicio.
+- **Sleep**: el servicio se duerme y el primer pedido tarda 30-60 s; el intento 1 del smoke daba timeout. Por eso reintenta 30 veces cada 20 s (~10 min).
+- **Build en cada deploy**: ~1 minuto por deploy, que consume minutos de build.
+- **Neon**: `app_qa` y `app_prod` separadas de verdad (lo de QA no aparece en PROD).
+- **Demos**: antes de mostrar algo, abro `/health` para despertarlo.
 
 ### 6. Lo que pierdo porque Render reconstruye desde el repo
 
-Los servicios se construyen desde el repo (Root Directory `backend`/`frontend`), no usando la imagen
-publicada en ghcr.io. Pierdo "construir una vez, desplegar el mismo artefacto": lo que corre en PROD no
-es byte a byte lo que pasó los tests, sino una reconstrucción del mismo commit. Los pins de
-`requirements.txt` reducen la deriva, pero la imagen base y las capas pueden diferir. Mitigaciones:
-el deploy pide el commit (`&ref=`) y el smoke verifica el SHA. Con un registry de punta a punta
-desplegaría por **digest** de la imagen que ya pasó los tests.
+Lo que corre en PROD no es byte a byte lo que pasó los tests, sino otra construcción del mismo commit: los pins de `requirements.txt` achican la deriva, pero la imagen base y las capas pueden diferir. Mitigaba pidiendo el commit (`&ref=`) y verificando el SHA en el smoke. (Lo resolví en el TP7 desplegando la imagen.) La dirección del backend del front (`BACKEND_URL`, `DNS_RESOLVER`) se lee al arrancar desde la plantilla de nginx: la misma imagen sirve en QA y PROD.
 
-**Qué quedó por variable y qué dentro de la imagen del front**: la dirección del backend
-(`BACKEND_URL`) y el resolver DNS (`DNS_RESOLVER`) se leen del entorno al arrancar, en la plantilla de
-nginx (`default.conf.template`); dentro de la imagen quedan la configuración de nginx y los estáticos.
-Por eso la misma imagen sirve en QA y en PROD apuntando cada una a su API.
+### 7. Qué prueba el smoke y qué no
 
-### 7. Qué prueba mi smoke test y qué no
+Prueba, con reintentos, que el backend corre **este commit** (`/health` devuelve `sha` y hace `SELECT 1`), que el front responde y que la base anda (registro, login y lectura de `/api/categorias` con token). **No** prueba el SHA del front, ningún flujo de negocio ni rendimiento, y deja un usuario de prueba en cada base. La primera versión daba verde con la versión vieja mientras Render construía; agregar el `sha` a `/health` lo resolvió (se ven intentos con `null` y después el SHA nuevo).
 
-Prueba, con reintentos: que el backend corre **este commit** (`/health` devuelve `sha` y hace un
-`SELECT 1`), que el front responde, y que la base funciona de punta a punta (registra/loguea un usuario
-de prueba y lee `/api/categorias` con token).
+### 8. Deployment pattern y rollback
 
-No prueba: el SHA del **front** (sólo el del backend), ningún flujo de negocio real, ni rendimiento. Y
-deja un efecto: crea un usuario de prueba (`smoke-qa@…`, `smoke-prod@…`) en cada base, incluida la de
-PROD.
+**Blue-green**: backend sin estado más una base, rollback instantáneo volviendo a apuntar al entorno anterior. Canary exigiría partir el tráfico y medir errores por versión, y no tenía ni balanceador ni métricas. No cubre los cambios de esquema que comparten las dos versiones. Me falta observabilidad: errores y latencia por versión, alertas y logs centralizados.
 
-**Cómo llegué a verificar el SHA**: la primera versión del smoke sólo comprobaba que algo contestara, y
-podía dar verde aunque Render siguiera sirviendo la versión vieja mientras construía (pasó en el intento 2
-del primer run, antes de que terminara el build). Agregué el `sha` a `/health`; en el run siguiente se
-ven los intentos 1-2 con `null` (versión vieja) y el 3 con el SHA nuevo.
-
-### 8. Deployment pattern para una producción real, y rollback
-
-**Pattern: blue-green.** La app es un backend sin estado más una base; con dos entornos idénticos y un
-cambio de tráfico, el rollback es instantáneo (volver a apuntar al entorno anterior) y tengo un entorno
-real donde probar antes del switch. Canary exigiría poder partir el tráfico y medir errores por versión,
-y hoy no tengo ni balanceador ni métricas para decidir si la canary va bien. Costo: duplicar la
-infraestructura. Riesgo que no cubre: los cambios de esquema de la base, que las dos versiones comparten.
-
-**Observabilidad que me falta**: tasa de errores y latencia por versión, alertas y logs centralizados.
-Hoy sólo tengo `/health` y los logs de Render.
-
-**Plan de rollback actual** (probado una vez de verdad):
-
-1. Render → `restoflow-api-prod` → *Manual Deploy* → *Deploy a specific commit* → el commit anterior de
-   PROD (`29a99b5`).
-2. Esperar a que *Deploys* lo muestre como *Live* y verificar `/health` (sin `sha`, porque esa versión es
-   anterior al cambio).
-3. Para volver a la versión del release, repetir con `7059c3c`.
-
-**Tiempo medido: 35,1 s** según *Deploys* de Render (37,24 s con mi cronómetro). Es una reconstrucción
-desde el repo, no un cambio de artefacto, así que el número depende del build de mi servicio.
-
-Lo que el rollback de código **no** deshace: los datos. Si el deploy malo escribió filas o cambió el
-esquema, volver al commit anterior no lo revierte; haría falta restaurar la base a un punto en el tiempo
-(Neon lo permite) o tener migraciones reversibles.
+**Rollback probado**: Render → `restoflow-api-prod` → *Manual Deploy* → *Deploy a specific commit* → `29a99b5` (el anterior en PROD), esperar *Live* y verificar `/health`; para volver, `7059c3c`. **Tiempo medido: 35,1 s** en *Deploys* de Render (37,24 s con cronómetro), reconstruyendo desde el repo. No deshace los datos: haría falta restaurar la base a un punto en el tiempo (Neon lo permite) o migraciones reversibles.
 
 ### 9. Problemas encontrados y cómo los resolví
 
-- **508 Loop Detected en Render** (#31): nginx reenviaba el `Host` del front y el balanceador devolvía la
-  llamada al propio front. Usé `$proxy_host`, que toma el host de `BACKEND_URL`.
-- **Imágenes en ghcr.io** (#29): hizo falta desactivar `provenance`/`sbom` en el push y habilitar el
-  acceso de Actions al paquete.
-- **El smoke daba verde con la versión vieja** (§7): lo resolví con el SHA en `/health`.
-- **`&ref=` no hace lo que yo creía.** Intenté el rollback con el hook y `&ref=<SHA anterior>`, y Render
-  redesplegó la punta (`7059c3c`) en vez del SHA pedido (lo vi en *Events*: "Triggered via Deploy Hook").
-  En el pipeline funcionaba porque `$GITHUB_SHA` coincide con la punta, así que nunca lo había probado con
-  otro commit. Consecuencia: el hook sirve para "desplegá este commit si es la punta", no para rollback;
-  para rollback uso Manual Deploy.
-- **Me equivoqué de destino del rollback**: pensé en `82190c2`, pero PROD nunca corrió ese commit (antes de
-  `7059c3c` estaba en `29a99b5`). Lo vi en *Events*.
-- **El botón Rollback nativo de Render no estaba disponible** para mí; por eso el camino manual.
-- **`curl` en PowerShell** es un alias de `Invoke-WebRequest`; usé `curl.exe`.
-- **Un test que fallaba según la hora del día** (#36): al mergear `decisiones.md`, `build-backend` falló en
-  `test_past_reservation_rejected` (devolvía 201 en vez de 400) en un PR que sólo tocaba documentación. La
-  causa: el test calculaba "ayer" con `date.today()`, que usa la zona del sistema (UTC en el runner),
-  mientras la app valida contra `America/Argentina/Cordoba` (UTC-3). Entre las 00:00 y las 03:00 UTC la
-  fecha del runner va un día adelante de la de Córdoba, así que "ayer" era hoy para la app y la reserva se
-  aceptaba. Estaba latente desde el TP5 y nunca lo había visto porque corría el CI de día. Lo arreglé
-  calculando la fecha del test en la misma zona que la app, y el CI del PR del arreglo pasó a las 01:42
-  UTC, dentro de la ventana en la que fallaba. No cambié la lógica de la app, sólo el test.
+- **508 Loop Detected** (#31): nginx reenviaba el `Host` del front; usé `$proxy_host`.
+- **ghcr.io** (#29): desactivé `provenance`/`sbom` y habilité el acceso de Actions al paquete.
+- **El smoke daba verde con la versión vieja**: SHA en `/health` (§7).
+- **`&ref=` no hace lo que creía**: el rollback con el hook redesplegó la punta (`7059c3c`) en vez del SHA pedido (lo vi en *Events*). Sirve para "desplegá este commit si es la punta", no para rollback; uso *Manual Deploy*.
+- **Destino de rollback equivocado**: pensé en `82190c2`, pero PROD nunca lo corrió; estaba en `29a99b5` (*Events*).
+- **Sin botón Rollback nativo** en mi plan: camino manual. **`curl` en PowerShell** es `Invoke-WebRequest`: usé `curl.exe`.
+- **Un test que fallaba según la hora** (#36): `test_past_reservation_rejected` calculaba "ayer" con la zona del runner (UTC) y la app valida con Córdoba (UTC-3): entre las 00:00 y las 03:00 UTC "ayer" era hoy. Calculé la fecha en la zona de la app; el CI pasó a las 01:42 UTC, dentro de la ventana que fallaba.
 
 ### 10. Declaración de uso de IA (TP6)
 
-Usé Claude como tutor y ejecutor de git/gh: escribió el job `deploy-qa`, `deploy-prod`, el cambio de
-`/health` y la plantilla de nginx, y me explicó cada decisión antes de aplicarla. Yo hice lo que requería
-cuentas y clics: Neon, Render, los environments y secrets, el reviewer, el rechazo y la aprobación, y el
-rollback. Verifiqué por mi cuenta los deploys *Live* en Render, que `/health` de QA y PROD devolviera el
-SHA esperado, y los logs del smoke en Actions. Cuando la IA se equivocó (el destino del rollback, la
-afirmación sobre `&ref=`), lo detecté contrastando con *Events* de Render y lo corregí. Puedo explicar qué
-pasa entre el merge y PROD: los dos builds, `deploy-qa` (hooks + smoke con SHA), la pausa del environment
-`production` hasta mi aprobación, y `deploy-prod` con el mismo smoke.
+Claude escribió los jobs `deploy-qa` y `deploy-prod`, el cambio de `/health` y la plantilla de nginx, explicando cada decisión antes de aplicarla. Yo hice lo que requería cuentas y clics: Neon, Render, environments, secrets, el reviewer, el rechazo, la aprobación y el rollback. Verifiqué los deploys *Live*, el SHA de `/health` en QA y PROD y los logs del smoke. Cuando la IA se equivocó (el destino del rollback, `&ref=`), lo detecté con *Events* de Render y lo corregí.
 
 ## TP7 — Imagen inmutable, integración y e2e como gate de promoción
 
 ### Enlaces del TP7
 
-- **Paquetes públicos** (`docker pull` por la etiqueta `sha-<commit>`, sin credenciales; los dos llevan la etiqueta del commit de PROD, `sha-5233d0bc8d63f6079e1272f84be170c081daee44`):
-  - [`ghcr.io/lucasrodrich/ingsoft3-tp01-backend`](https://github.com/lucasrodrich/ingsoft3-tp01/pkgs/container/ingsoft3-tp01-backend)
-  - [`ghcr.io/lucasrodrich/ingsoft3-tp01-frontend`](https://github.com/lucasrodrich/ingsoft3-tp01/pkgs/container/ingsoft3-tp01-frontend)
-- **El par integración VERDE / e2e ROJA** que frenó una promoción:
-  - Commit que rompió la **app** (no el test): [`141c8be`](https://github.com/lucasrodrich/ingsoft3-tp01/commit/141c8be) — el formulario de mesas manda `numeroMesa` en vez de `numero`. No toca `e2e/`.
-  - La corrida: [runs/37876705321](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/37876705321) — smoke verde, integración verde, e2e roja, `deploy-prod` sin arrancar.
-  - Los dos reportes: [`playwright-report-integracion`](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/37876705321/artifacts/11592448032) (verde) y [`playwright-report-e2e`](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/37876705321/artifacts/11592936587) (roja, con captura y traza).
-- **La corrida completa en verde**, hasta PROD con aprobación: [runs/37878408979](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/37878408979) (arreglo [`5233d0b`](https://github.com/lucasrodrich/ingsoft3-tp01/commit/5233d0b)).
-- **Release `v7.0.0`** sobre el commit que *Deployments* marca en PROD: [release](https://github.com/lucasrodrich/ingsoft3-tp01/releases/tag/v7.0.0).
-- **URLs de QA y PROD** (las mismas del TP6, vivas hasta la defensa; el primer pedido tras un rato sin uso tarda 30-60 s):
-  QA [front](https://restoflow-front-qa.onrender.com) · [API](https://restoflow-api-qa.onrender.com/health) — PROD [front](https://restoflow-frontend-prod.onrender.com) · [API](https://restoflow-api-prod.onrender.com/health).
+- **Paquetes públicos** (`docker pull` por `sha-<commit>`, sin credenciales; los dos tienen la etiqueta del commit de PROD, `sha-5233d0bc8d63f6079e1272f84be170c081daee44`): [`ingsoft3-tp01-backend`](https://github.com/lucasrodrich/ingsoft3-tp01/pkgs/container/ingsoft3-tp01-backend) · [`ingsoft3-tp01-frontend`](https://github.com/lucasrodrich/ingsoft3-tp01/pkgs/container/ingsoft3-tp01-frontend).
+- **Integración VERDE / e2e ROJA**: el commit que rompió la **app** (no el test) [`141c8be`](https://github.com/lucasrodrich/ingsoft3-tp01/commit/141c8be) (el form de mesas manda `numeroMesa`; no toca `e2e/`) · corrida [runs/37876705321](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/37876705321) (smoke e integración verdes, e2e roja, `deploy-prod` sin arrancar) · reportes [`playwright-report-integracion`](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/37876705321/artifacts/11592448032) (verde) y [`playwright-report-e2e`](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/37876705321/artifacts/11592936587) (roja, con captura y traza).
+- **Corrida completa en verde hasta PROD**: [runs/37878408979](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/37878408979) (arreglo [`5233d0b`](https://github.com/lucasrodrich/ingsoft3-tp01/commit/5233d0b)). Release [`v7.0.0`](https://github.com/lucasrodrich/ingsoft3-tp01/releases/tag/v7.0.0) sobre ese commit.
+- **QA y PROD**: las mismas del TP6. Dos Dockerfiles, así que dos paquetes y **cuatro** servicios de imagen. Los *Events* de Render ("Triggered via Deploy Hook" con el `sha-…`) no se pueden enlazar: los muestro en vivo.
 
-> Tengo **dos** Dockerfiles (backend y frontend), así que son dos paquetes y **cuatro** servicios image-backed (api y front, QA y PROD).
-> Lo que NO queda en el repo y muestro en vivo: los *Events* de cada servicio de Render, que dicen «Triggered via Deploy Hook» y nombran la imagen `sha-<commit>` de la corrida.
+### 1. Build once, deploy many
 
-### 1. Build once, deploy many: qué problema del TP6 resuelve
+En el TP6, QA y PROD corrían **otra construcción** del commit, no la imagen que aprobaron los tests, y no podía probar que fueran iguales (el `&ref=` ni siquiera desplegaba el commit pedido si no era la punta). Ahora el pipeline construye **una vez**, publica `…:sha-<commit>` y los cuatro servicios **ejecutan esa imagen**: el hook ya no dice qué construir sino qué ejecutar (`imgURL=…:sha-<commit>`). En [37878408979](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/37878408979), `deploy-qa` y `deploy-prod` muestran las mismas dos etiquetas.
 
-En el TP6 Render **reconstruía** mi app desde el repo en cada deploy: lo que corría en QA y PROD no era la imagen que mis tests habían aprobado, sino otra construcción del mismo commit. Lo dejé escrito como límite (§6 del TP6): con el `requirements.txt` fijado la deriva era chica, pero la imagen base y las capas podían diferir, y **no tenía forma de probar que eran iguales**. Mi ejemplo propio: el hook con `&ref=` ni siquiera desplegaba el commit que yo pedía cuando no era la punta de `main` (me di cuenta al intentar un rollback), así que "despliega este commit" tampoco era una garantía.
+### 2. Etiquetas, sin `latest`
 
-Ahora el pipeline construye **una vez** (`build-backend`/`build-frontend`), publica `…:sha-<commit>`, y los cuatro servicios *ejecutan esa imagen*: el hook ya no dice "qué commit construir" sino "qué imagen ejecutar" (`imgURL=…:sha-<commit>`). QA y PROD reciben **exactamente la misma imagen**: se lee en los logs de la corrida `37878408979`, donde `deploy-qa` y `deploy-prod` muestran las mismas dos etiquetas `sha-5233d0bc…`.
+- **`sha-<commit>` (40 caracteres)** identifica lo publicado por un commit y se publica una sola vez. La corta (`sha-5233d0b`) **no existe** (404 comprobado).
+- **`v7.0.0` en git** es el nombre humano de lo que está en PROD.
+- **Sin `latest`**: es móvil, y "qué corre en PROD" dejaría de tener respuesta.
+- **Lo configurado en Render no es lo que corre**: cambié la fuente de los cuatro servicios (no creé nuevos, así conservé URL, variables y hooks) a *Existing Image* con `sha-3d8cd4f…`, porque Render exige una. Lo que corre lo decide cada deploy con `imgURL`. Lo comprobé en `restoflow-api-qa`: el encabezado decía `sha-3d8cd4f…` y el digest `c44c194` era el de `sha-3ff3c93…`. **Peligro**: *Manual Deploy* desplegaría lo de *Settings*, o sea, retrocedería en silencio. No lo uso.
 
-### 2. Etiquetas: `sha-<commit>` en el registry, `v7.0.0` en git
+### 3. Del tag a la imagen
 
-- **`sha-<commit>` (40 caracteres)** identifica el *contenido publicado por un commit* y se publica una sola vez por merge a `main`. Es la que usa el pipeline para promover. La etiqueta corta (`sha-5233d0b`) **no existe** en el registry: la comprobé (404) y el hook contestaría `400 unable to fetch image`.
-- **`v7.0.0` en git** le pone nombre humano a lo que está en PROD. Del tag a la imagen en un paso: `git rev-list -n1 v7.0.0` → `5233d0bc…`, y esa es la etiqueta `sha-5233d0bc…` que está en mis dos paquetes.
-- **No publico `latest`**: es una etiqueta *móvil* —apunta a lo último que alguien subió—, y con ella "qué corre en PROD" dejaría de tener respuesta. Con `sha-<commit>` cada etiqueta apunta siempre al mismo contenido y la promoción es explícita.
-- **Qué imagen tienen configurados los servicios de Render y por qué no es ésa la que corre**: cambié la fuente de los cuatro a *Existing Image* con la etiqueta de un merge viejo (`sha-3d8cd4f…`), solo como punto de partida: Render exige una imagen para cambiar la fuente. Lo que corre lo nombra cada deploy del pipeline con su `imgURL`, así que *Settings → Image* queda desactualizado a propósito. Lo comprobé en `restoflow-api-qa`: el encabezado mostraba `sha-3d8cd4f…` pero el digest corto `c44c194` era el de `sha-3ff3c93…` (lo verifiqué contra el registry). **Peligro**: *Manual Deploy* despliega lo de *Settings*, es decir, **retrocedería** el servicio a ese commit viejo, en verde y sin avisar. No lo uso.
-- **Servicios nuevos o viejos**: cambié la fuente de los existentes (no creé nuevos), lo que conservó URL, variables y hooks. No hay servicios viejos que borrar.
-
-### 3. Del tag a la imagen que hay que desplegar
-
-`git rev-list -n1 v7.0.0` da el commit; la imagen es `ghcr.io/lucasrodrich/ingsoft3-tp01-{backend,frontend}:sha-<ese commit>`. Para volver a esa versión: disparar el hook del servicio con `--data-urlencode "imgURL=<esa imagen>"`. (El rollback del TP6 —*Manual Deploy* de un commit anterior— **ya no vale** con servicios de imagen, por lo explicado arriba. El mecanismo que lo reemplazaría, el hook con la etiqueta anterior, **no lo probé ni lo medí** en este TP.)
+`git rev-list -n1 v7.0.0` da `5233d0bc…`; la imagen es `ghcr.io/lucasrodrich/ingsoft3-tp01-{backend,frontend}:sha-5233d0bc…`. Volver a esa versión sería disparar el hook con esa `imgURL`; ese rollback por imagen **no lo probé ni lo medí** (el de *Manual Deploy* del TP6 ya no vale).
 
 ### 4. Cómo se comprueba, desde afuera, que un entorno ejecuta mi imagen
 
-- **En *Events* de Render** (en vivo en la defensa): cada deploy dice «Triggered via Deploy Hook», nombra `…-backend:sha-<commit>` / `…-frontend:sha-<commit>` y hay una corrida que lo respalda. Un deploy manual desde el panel no diría «Triggered via Deploy Hook».
-- **Por el digest**: el encabezado de cada servicio muestra el digest corto de lo que *corre*, y lo comparo con el del registry (`curl -I` al manifest). Backend `c44c194`. Ojo con el front: el digest `70c4b6f` es el **mismo** para `sha-3d8cd4f` y `sha-3ff3c93`, porque el front no cambió entre esos commits y Docker reutilizó las capas; para el front la prueba es la etiqueta en *Events*, no el digest.
-- **Por `/health`**: el backend devuelve `"sha":"<commit>"`, que grabé **dentro de la imagen** (`ARG`/`ENV GIT_SHA` + `build-args`). Pensé en reusar `RENDER_GIT_COMMIT` del TP6, pero esa variable la inyecta Render en servicios construidos desde git; no verifiqué qué pasa en uno de imagen y preferí no depender de ella. Grabar el SHA en la imagen no depende de Render, y el smoke con SHA anduvo a la primera con este mecanismo.
-- **Qué NO alcanza a probar el smoke**: comprueba que el backend corre el SHA esperado, que el front responde y que la base funciona (login + lectura). No dice nada del **SHA del front** (solo del backend) ni de que "la app funcione" para un usuario: de hecho el smoke estuvo **verde con el front roto** (corrida `37876705321`).
+- **Events de Render**: "Triggered via Deploy Hook" con `…:sha-<commit>` y una corrida que lo respalda.
+- **Digest**: el encabezado muestra el digest corto de lo que corre y lo comparo con el del registry. En el front el digest se repite entre commits que no lo cambiaron (capas reutilizadas): ahí la prueba es la etiqueta en *Events*.
+- **`/health`**: devuelve el `sha` que grabé **dentro de la imagen** (`ARG`/`ENV GIT_SHA`). No usé `RENDER_GIT_COMMIT` porque Render la pone en servicios construidos desde git.
+- **Qué no prueba el smoke**: el SHA del front ni que la app funcione para un usuario; estuvo **verde con el front roto** en [37876705321](https://github.com/lucasrodrich/ingsoft3-tp01/actions/runs/37876705321).
 
-### 5. Qué flujos elegí y qué no puse en cada suite (pirámide)
+### 5. Qué flujos puse en cada suite (pirámide)
 
-**Integración** (`frontend/e2e/api.spec.js`, sin navegador, contra la API de QA con su Postgres): (a) alta de mesa → el listado la encuentra → baja → ya no está; (b) capacidad 0 → la API rechaza con **422** y no se creó nada; (c) **elegida**: un usuario pide la mesa de otro y recibe 404. Elegí (c) porque es una regla de negocio que solo existe con autenticación + base reales (cada consulta filtra por `user_id`): un unitario con un doble de la sesión no puede ver que el filtro realmente excluye filas de otro usuario. Si se rompe, la API está filtrando mal y **cualquier cliente ve datos ajenos**.
-
-**e2e** (`frontend/e2e/mesas.spec.js`, Chromium contra el front de QA): (1) crear una mesa → aparece → eliminarla → ya no está; (2) número repetido → el usuario ve el error → sigue habiendo una sola; (3) **elegido**: iniciar sesión por la pantalla y que saluden al usuario. Elegí el login porque es el flujo que "si mañana no anda, me escriben" (sin él nadie usa nada) y además toca la base.
-
-**Lo que NO puse, y por qué**: no repito en e2e los cálculos del pedido, las transiciones de estado ni el solapamiento de reservas: ya están en los unitarios del TP5, que son mucho más rápidos y baratos de ejecutar. Y no puse en integración nada que requiera un navegador. Cada capa prueba lo que solo ella puede ver: unitario = una regla pura; integración = API + base; e2e = cómo el front usa la API.
+- **Integración** (`frontend/e2e/api.spec.js`, sin navegador, contra la API de QA): alta → listado → baja; capacidad 0 → **422** sin crear nada; y **elegida**: un usuario pide la mesa de otro y recibe 404. Esa regla sólo existe con autenticación y base reales; si se rompe, cualquier cliente ve datos ajenos.
+- **e2e** (`frontend/e2e/mesas.spec.js`, Chromium contra el front de QA): crear y borrar una mesa; número repetido → el usuario ve el error; y **elegido**: el login, porque sin él nadie usa nada y además toca la base.
+- **Qué no puse**: cálculos, transiciones y solapamientos ya están en los unitarios del TP5, más rápidos y baratos. Cada capa prueba lo que sólo ella puede ver.
 
 ### 6. Qué dice el par verde/roja
 
-Tabla de la corrida roja (`37876705321`):
-
 | smoke | integración | e2e | Lectura |
 |---|---|---|---|
-| verde | **verde** | **roja** | La API y la base están sanas (les hablé directo, con el campo correcto, y guardaron y borraron). Lo que falló es **cómo el front usa la API**. |
+| verde | **verde** | **roja** | API y base sanas; lo roto es **cómo el front usa la API** |
 
-No hizo falta abrir el código: el par lo dice. En el reporte rojo, la traza (pestaña *Network*) muestra el `POST /api/mesas` con respuesta 422: el front mandó `numeroMesa` y la API esperaba `numero`. Si hubiera roto la **API**, la integración habría quedado roja y la e2e **no habría corrido** (su `needs` no se cumple), que es otra fila de la tabla y otra información. Tampoco lo ataja un unitario: los del front (TP5) solo cubren `utils` y `client`, no el formulario.
+Sin abrir el código: la traza del reporte rojo muestra el `POST /api/mesas` con 422 (el front mandó `numeroMesa`). Si se rompía la API, la integración salía roja y la e2e ni corría (`needs`). Ningún unitario lo ataja: los del front no cubren el formulario. Mi gate no ve lo que queda fuera de esos 6 flujos (reservas, pedidos), ni carga ni navegadores distintos de Chromium.
 
-**Qué clase de bug mi gate no ataja**: cualquier cosa fuera de los 3 flujos y 3 pruebas (por ejemplo, un error en reservas o en pedidos), y todo lo que depende de datos reales, carga, rendimiento o navegadores distintos de Chromium.
+### 7. Por qué la integración es la amplia
 
-### 7. Por qué la integración es la *amplia* y qué gano y pierdo
+Le habla a la API de QA ya desplegada: **gano** probar la misma imagen y la misma base que van a PROD sin infraestructura extra; **pierdo** aislamiento y velocidad de diagnóstico (depende de que QA esté vivo y comparte datos). Lo mitigo con usuarios dedicados, números de mesa únicos y limpieza comprobada.
 
-Mi integración le habla a la **API de QA ya desplegada** (`API_BASE_URL`), no a una copia armada en el job con un Postgres propio (la estrecha). **Gano** que probé la misma imagen y la misma base que van a PROD, sin infraestructura extra en el job: no hay Postgres que levantar ni drivers que simular. **Pierdo** aislamiento y velocidad de diagnóstico: depende de que QA esté vivo (cold start), comparte datos con otras corridas y con la e2e, y un fallo puede ser del entorno y no del código. Lo mitigo con usuarios de prueba dedicados, números de mesa que no se repiten y limpieza comprobada en cada prueba.
+### 8. Cold start, flaky y base compartida
 
-### 8. Cold start, tests flaky y la base compartida
-
-- **Cold start**: el smoke del job anterior ya despertó QA (reintenta 30 veces cada 20 s, ~10 min). Las suites tienen `timeout` de 60 s por test y 15 s por aserción: esperan lo que buscan en vez de `sleep` o `test.skip`. Playwright corre con `retries: 1` y 1 worker.
-- **Test flaky**: uno que a veces pasa y a veces falla *sin que cambie el código*. Es peor que no tener test porque entrena al equipo a ignorar el rojo. Mi configuración no lo esconde: el reintento puede absorber una demora suelta, pero un test que pasa recién al reintentar sale marcado como *flaky* en el reporte aunque la corrida esté verde. En mis corridas verdes no apareció ninguno.
-- **Base compartida entre las dos suites**: el QA es uno solo. Cada prueba que crea datos usa un número de mesa que no se repite (segundos desde 1970 + un azar), borra lo que creó y lo comprueba, y el `workers: 1` evita que dos pruebas corran a la vez. Si una corrida dejara basura, la vería como mesas sobrantes en la lista del usuario de prueba. Los dos usuarios de prueba (`e2e-a`, `e2e-b`) **quedan para siempre** en la base de QA, porque la app no tiene "borrar usuario".
+El smoke ya despertó QA. Las suites esperan lo que buscan con `timeout` de 60 s por test y 15 s por aserción, en vez de `sleep`; `retries: 1` y `workers: 1`. Un **test flaky** pasa o falla sin que cambie el código, y entrena a ignorar el rojo; mi reintento absorbe una demora suelta pero el reporte lo marca *flaky*. No apareció ninguno. Los usuarios `e2e-a` y `e2e-b` quedan para siempre en QA (la app no borra usuarios).
 
 ### 9. Una imagen del front para QA y PROD
 
-La dirección del backend **no está dentro de la imagen del front**: nginx la lee de las variables `BACKEND_URL` y `DNS_RESOLVER` al arrancar (plantilla `default.conf.template`). Quedan **por variable**, cada servicio con la suya: la API de su entorno y el resolver. **Quedan adentro de la imagen**: la configuración de nginx y los estáticos compilados. Por eso la misma imagen `sha-<commit>` sirve en QA y en PROD, cada una hablando con su API.
+`BACKEND_URL` y `DNS_RESOLVER` se leen al arrancar (`default.conf.template`); adentro de la imagen sólo quedan la configuración de nginx y los estáticos. Por eso `sha-<commit>` sirve en los dos entornos.
 
-### 10. Límite conocido: un solo QA y dos merges seguidos
+### 10. Límite: un solo QA y dos merges seguidos
 
-Mi QA es uno solo y lo comparten todas las corridas, y ahora además dos jobs seguidos lo usan (`integracion` y `e2e`). Si hago dos merges seguidos, la corrida B puede redesplegar QA mientras la integración o la e2e de la A lo usan: se vería como un rojo (o un verde) que no es de mi código, y lo reconocería mirando en *Events* qué imagen corre QA y a qué hora corrió el `deploy-qa` de B. Qué haría: rechazar la corrida A con el motivo (`concurrency` no la cancela porque está esperando aprobación, no en cola), no re-correr sus jobs y dejar valer la B. Regla que sigo: **un merge por vez** mientras la cadena corre. Lo mantuve en todo el TP7; **no lo probé provocándolo**. Lo que lo resolvería de verdad es un entorno por corrida, fuera del alcance de este práctico.
+La corrida B puede redesplegar QA mientras la integración o la e2e de A lo usan. Lo reconocería en *Events*; rechazaría la corrida A y dejaría valer la B. Regla: **un merge por vez**. No lo provoqué; lo resolvería un entorno por corrida.
 
 ### 11. Problemas encontrados y cómo los resolví
 
-- **El SHA del smoke con servicios de imagen**: mi smoke comparaba el `sha` de `/health` con el commit de la corrida, pero ese valor venía de una variable de Render. Antes de migrar vi el riesgo de depender de una variable que Render pone al construir desde git, y grabé el SHA dentro de la imagen (§4). No comprobé si la variable existe en un servicio de imagen: lo evité.
-- **La API contesta 422, no 400**, ante datos inválidos: lo vi al escribir la integración (el manejador de `RequestValidationError`), y la prueba (b) afirma 422.
-- **Docker Desktop apagado** al hacer el `docker pull` del checkpoint: lo reemplacé primero por una consulta anónima al manifest del registry (que prueba lo mismo) y repetí el `pull` real al encenderlo.
-- **Errores de tipeo al copiar comandos a Git Bash**: copié el `$` del prompt y omití `SHA` en una variable; el hook no llegó a ejecutarse. Pasé a pegar la etiqueta completa, sin variables.
-- **El encabezado del servicio mostraba una imagen vieja**: confundía lo *configurado* con lo que *corre* (§2). Lo resolví comparando el digest con el del registry.
-- **Dos runs del TP6 quedaron esperando aprobación** al migrar: los **rechacé antes** de tocar Render para que no se pudieran aprobar por el camino viejo (`&ref=`, que un servicio de imagen ignora). Dos de esos rechazos quedaron **sin comentario** (no se puede agregar después): son rechazos de limpieza, no el rechazo con motivo del TP6, que está en el run `37859121585`.
-- **Los reportes de Playwright vs vitest**: vitest matchea todo `*.spec.js`; excluí `e2e/**` en `vite.config.js` para que no rompa `build-frontend`.
+- **El SHA del smoke venía de una variable de Render**: lo grabé en la imagen antes de migrar (§4).
+- **La API contesta 422, no 400**, ante datos inválidos: la prueba lo afirma.
+- **Docker Desktop apagado** en el checkpoint: probé con una consulta anónima al manifest y repetí el `pull` al encenderlo.
+- **Errores de tipeo en Git Bash** (el `$` del prompt, una variable sin `SHA`): pasé a pegar la etiqueta completa.
+- **Dos runs del TP6 esperando aprobación**: los rechacé antes de migrar para que no se aprobaran por el camino viejo (`&ref=`). El rechazo con motivo del TP6 es el de `37859121585`.
+- **vitest tomaba los `*.spec.js` de Playwright**: excluí `e2e/**` en `vite.config.js`.
 
 ### 12. Declaración de uso de IA (TP7)
 
-Claude me guió bloque por bloque y escribió el código: el cambio de los hooks a `imgURL`, el `GIT_SHA` en la imagen, las dos suites de Playwright, los jobs `integracion` y `e2e`, el `needs: e2e` de `deploy-prod`, la rotura a propósito y el arreglo. Yo hice lo que requería mi cuenta y mis clics: cambiar la fuente de los cuatro servicios en Render, disparar el primer deploy a mano, aprobar y rechazar en GitHub, leer el reporte rojo, y verificar *Events*. **Cómo lo verifiqué**: las seis pruebas corrieron en verde primero contra mi docker compose local antes de llegar al pipeline; comprobé el SHA en `/health` de QA y PROD, y el digest contra el registry; y pedí mergear la rotura sin tocar `e2e/` para ver el rojo con mis propios ojos y diagnosticarlo con el reporte. **Dónde la IA no cubrió algo**: la guía no contempla que el smoke con SHA del TP6 dependía de una variable de Render (§4), y el límite real del smoke (verde con el front roto) solo se hizo evidente al correr la rotura en el pipeline (§4). Puedo explicar qué verifica cada test, contra qué entorno corre y qué pasa si falla.
+Claude escribió el código: hooks con `imgURL`, `GIT_SHA` en la imagen, las suites de Playwright, los jobs `integracion` y `e2e`, la rotura y el arreglo. Yo cambié la fuente de los servicios en Render, disparé el primer deploy, aprobé y rechacé, leí el reporte rojo y verifiqué *Events*. Las seis pruebas corrieron verdes primero contra mi docker compose; comprobé SHA y digest contra el registry; y pedí mergear la rotura sin tocar `e2e/` para diagnosticarla con mis ojos. El límite del smoke (verde con el front roto) sólo se vio al correr la rotura.
 
 ## TP8 — Infraestructura como código: preprod con Terraform
 
@@ -858,141 +580,99 @@ Release [`v8.0.0`](https://github.com/lucasrodrich/ingsoft3-tp01/releases/tag/v8
 
 ### 1. Riel elegido y versiones fijadas
 
-Elegí **Terraform** (v1.16.5, instalado con `winget`) sobre el riel de siempre, **Neon + Render**, porque mis dos cuentas ya funcionaban desde el TP6 y es lo que la cátedra midió. Providers fijados por versión exacta, con el `.terraform.lock.hcl` commiteado:
+**Terraform** v1.16.5 (`winget`) sobre **Neon + Render**, mis cuentas desde el TP6. Providers por versión exacta, con `.terraform.lock.hcl` commiteado:
 
 | Provider | Versión | Para qué |
 |---|---|---|
 | `kislerdm/neon` | 0.18.0 | proyecto, rol y base de preprod |
 | `render-oss/render` | 1.9.1 | los dos servicios de preprod |
-| `hashicorp/random` | 3.9.1 | el secreto JWT, para que no exista escrito en ningún archivo |
+| `hashicorp/random` | 3.9.1 | el secreto JWT, para que no esté escrito en ningún archivo |
 
-Lo que declaré es un entorno **nuevo, `preprod`** (`infra/`: `main.tf`, `variables.tf`, `outputs.tf`). **Mi QA y mi producción no se tocan**: no los importé ni los modifiqué. Preprod corre las imágenes del TP7 (`sha-` del commit de `v7.0.0`), con su propia base en un proyecto de Neon aparte.
+Declaré un entorno **nuevo, `preprod`**, con las imágenes del TP7 y su propia base; QA y PROD no se tocan. **Sin credenciales en el HCL**: `NEON_API_KEY`, `RENDER_API_KEY` y `RENDER_OWNER_ID` vienen del entorno, el `org_id` por `TF_VAR_neon_org_id`. **Se derivan, no se copian**: la `DATABASE_URL` se arma con el rol, la contraseña y el host que devuelve Neon, y la `BACKEND_URL` del front sale del `url` de su API. **El estado vive en mi máquina** (`.gitignore` desde antes del primer `apply`): tiene la contraseña del rol en texto plano.
 
-- **Sin credenciales en el HCL**: `NEON_API_KEY`, `RENDER_API_KEY` y `RENDER_OWNER_ID` los leen los providers del entorno; el `org_id` de Neon llega por `TF_VAR_neon_org_id`; el secreto JWT lo genera `random_password`.
-- **Se derivan, no se copian**: la cadena de conexión del backend (`DATABASE_URL`) se arma con el rol, la contraseña y el host que devuelve Neon, y la `BACKEND_URL` del front sale del atributo `url` de su propia API.
-- **El estado vive en mi máquina** (`terraform.tfstate`), cubierto por el `.gitignore` junto con `.terraform/` y los `*.tfvars` desde antes del primer `apply`. En el repo viajan solo los tres `.tf`, el lockfile y el `.gitignore`.
+### 2. Qué comprobé
 
-### 2. Qué comprobé (el ciclo, medido)
+- **Idempotencia**: el segundo `plan` dijo *No changes*.
+- **`destroy → apply`**: 6 recursos borrados y recreados, con QA y PROD intactos (mismo `sha` antes y después). El orden del `destroy`, visto en la ejecución: front → api → base y secreto → rol → proyecto, el inverso de la creación, deducido del grafo de dependencias. Render devolvió **la misma URL**; cambia la identidad de lo creado, por eso la conexión se deriva.
+- **Preprod funciona**: `/health` con el `sha`, el front carga, me registré y la API listó categorías.
+- **Drift**: borré `app_preprod` a mano y el plan lo vio y lo reparó; una `base_intrusa` creada a mano **no la ve**: vigila lo declarado, no todo lo que existe.
+- **`prevent_destroy`** temporal en la base: el `destroy` se negó nombrando el recurso.
 
-- **Idempotencia**: tras el primer `apply`, el segundo `plan` dijo *No changes*.
-- **El estado por dentro**: encontré la contraseña del rol en texto plano en `terraform.tfstate`; por eso el estado no se commitea y por eso su pérdida o filtración importan.
-- **`destroy → apply`**: el `destroy` borró 6 recursos y el `apply` los recreó. Con QA y PROD intactos: sus `/health` dieron el mismo `sha` antes y después. El orden del `destroy` se vio **en la ejecución**, no en el plan (que lista alfabéticamente): front → api → base y secreto → rol → proyecto, el inverso de la creación, deducido del grafo de dependencias.
-- **Preprod como entorno**: el `/health` de su API devuelve el `sha` de la imagen, el front carga, y me registré a través del front y la API listó las categorías desde la base nueva.
-- **Algo que la guía dejaba sin medir**: al recrear, Render devolvió **la misma URL** (sin sufijo). Lo que sí cambia es la identidad de lo creado (otro proyecto de Neon y otro host), por eso la conexión se deriva y no se guarda.
-- **Drift**: borré a mano `app_preprod` y el plan lo detectó y el `apply` lo reparó; creé a mano una `base_intrusa` y el plan **no la ve**. Terraform vigila lo que declaré, no todo lo que existe.
-- **`prevent_destroy`** puesto temporalmente en la base: el `destroy` se negó, nombrando el recurso. Después saqué la línea.
+### 3. Límites: qué sigue artesanal
 
-### 3. Límites y qué sigue siendo artesanal
-
-- Mis cuatro servicios de QA y PROD **no están en ningún plan**: un `terraform plan` limpio no dice nada sobre ellos, aunque existen y corren. Siguen creados a mano.
-- El estado local no se puede compartir: otra máquina o una corrida del pipeline no podrían comparar contra él.
-- Preprod **no está conectado al pipeline** (la extensión opcional del TP): el deploy hook de Render no sale de Terraform, y un job que le pegue a un entorno destruido pondría la cadena en rojo.
-- El plan gratuito de Render **no permite modificar** un servicio desde Terraform; por eso un cambio de preprod se hace con `destroy` + `apply` (o `-replace`), nunca con `update`.
-- Las 750 horas de Render son del **workspace**. Mis servicios de preprod quedaron en **otro workspace** que los cuatro de QA y PROD, así que no compiten por la misma cuota; igual lo destruyo al terminar cada sesión.
+Los cuatro servicios de QA y PROD no están en ningún plan. El estado local no se comparte. Preprod no está conectado al pipeline. El free de Render no deja modificar un servicio desde Terraform (`destroy` + `apply`). Preprod vive en otro workspace de Render, así que no compite por las 750 horas; igual lo destruyo al terminar.
 
 ### 4. Problemas encontrados y cómo los resolví
 
-- **Neon pedía `org_id`**: el primer `apply` falló con `org_id is required` y la guía no lo menciona (los proyectos se crean ahora dentro de una organización). Lo agregué como variable (`neon_org_id`, vía `TF_VAR_neon_org_id`) para no escribirlo en el código.
-- **El backend no usa `ConnectionStrings__Default`** (formato .NET de la guía): lee `DATABASE_URL`. Armé la URL con `postgresql+psycopg://…?sslmode=require` y `urlencode` de la contraseña, porque Neon exige SSL.
-- **`GIT_SHA` no se declara como variable del servicio**: viene grabado en la imagen (TP7) y una variable del servicio lo pisaría.
-- **Terraform no estaba en el `PATH`** al abrir una terminal ya existente tras instalarlo con `winget`; abrí una ventana nueva.
-- **Comandos en PowerShell**: `curl` es un alias de `Invoke-WebRequest` (usé `curl.exe`), y una URL armada con `$(…)` debe ir entera entre comillas; si no, PowerShell la parte en dos argumentos.
-- **No veía los servicios nuevos en Render**: estaban en otro workspace, no en el proyecto de los cuatro originales.
+- **Neon pedía `org_id`** (la guía no lo menciona): variable `neon_org_id` vía `TF_VAR_`.
+- **El backend lee `DATABASE_URL`**, no `ConnectionStrings__Default`: `postgresql+psycopg://…?sslmode=require` con `urlencode` de la contraseña.
+- **`GIT_SHA` no va como variable del servicio**: viene en la imagen y la pisaría.
+- **Terraform fuera del `PATH`** tras `winget`: terminal nueva. **PowerShell**: `curl.exe`, y URLs con `$(…)` entre comillas.
+- **No veía los servicios nuevos**: estaban en otro workspace de Render.
 
 ### 5. Declaración de uso de IA (TP8)
 
-Claude me guió bloque por bloque y escribió el HCL (`main.tf`, `variables.tf`, `outputs.tf`), adaptándolo a mi app y a los cambios de Neon. Yo hice lo que requería mis cuentas y mi terminal: instalar Terraform, crear y exportar las credenciales, correr `init`, `plan`, `apply` y `destroy`, hacer los experimentos de drift y de `prevent_destroy`, y revisar la consola de Neon y el dashboard de Render. **Cómo lo verifiqué**: leí cada plan antes de aplicarlo y puedo explicar qué crea cada recurso y por qué en ese orden; comprobé el `/health` y el registro a través del front en preprod; y comparé el `/health` de QA y PROD antes y después del `destroy`. Si hay que leer un plan en voz alta en la defensa, puedo explicar qué haría cada acción.
+Claude escribió el HCL adaptándolo a mi app y a los cambios de Neon. Yo instalé Terraform, creé y exporté las credenciales, corrí `init`, `plan`, `apply` y `destroy`, e hice los experimentos de drift y `prevent_destroy`. Leí cada plan antes de aplicarlo, comprobé preprod por el front y comparé `/health` de QA y PROD antes y después del `destroy`.
 
 ## TP9 — DevSecOps, observabilidad y feedback continuo
 
-Release [`v9.0.0`](https://github.com/lucasrodrich/ingsoft3-tp01/releases/tag/v9.0.0). El postmortem del incidente que encontró Sentry está en el §6.
+Release [`v9.0.0`](https://github.com/lucasrodrich/ingsoft3-tp01/releases/tag/v9.0.0).
 
-### 1. Las tres capas, activas (y qué no mira cada una)
+### 1. Las tres capas (y qué no mira cada una)
 
-| Capa | Qué tengo | Qué **no** mira | Qué cubre ese hueco |
+| Capa | Qué tengo | Qué **no** mira | Qué cubre el hueco |
 |---|---|---|---|
-| Secretos | Secret scanning + **push protection** activos (*Settings → Advanced Security*) | Secretos sin patrón conocido: mi `JWT_SECRET`, la contraseña de Postgres | `.env` gitignoreado (TP2), secrets cifrados por environment (TP4/TP6), credenciales de Terraform por el entorno (TP8) |
-| Dependencias | `.github/dependabot.yml` ([#47](https://github.com/lucasrodrich/ingsoft3-tp01/pull/47)) con **pip, npm, github-actions, docker y terraform**; alertas y *security updates* prendidas | Vulnerabilidades sin CVE publicado, y mi propio código | CodeQL y los tests |
-| Código propio | **CodeQL** default setup (Python, JS/TS y Actions), en cada PR, cada push a `main` y semanal | Lógica de negocio mal hecha que no es un patrón de seguridad; lo que pasa en ejecución | Tests (TP5), integración y e2e (TP7), Sentry |
+| Secretos | Secret scanning + **push protection** | Secretos sin patrón conocido (`JWT_SECRET`, la contraseña de Postgres) | `.env` gitignoreado (TP2), secrets por environment (TP4/TP6), credenciales de Terraform por el entorno (TP8) |
+| Dependencias | `dependabot.yml` ([#47](https://github.com/lucasrodrich/ingsoft3-tp01/pull/47)) con pip, npm, actions, docker y terraform; alertas y *security updates* | Fallas sin CVE publicado; mi código | CodeQL y los tests |
+| Código propio | **CodeQL** default (Python, JS/TS, Actions) en cada PR, push y semanal | Lógica de negocio mal hecha; lo que pasa en ejecución | Tests (TP5/TP7) y Sentry |
 
-Puse cinco ecosistemas y no tres porque la imagen base de los Dockerfiles y los providers de Terraform también son código ajeno que ejecuto.
+Cinco ecosistemas porque las imágenes base y los providers también son código ajeno. **CodeQL** encontró 4 `actions/missing-workflow-permissions` (OWASP **A01**, mínimo privilegio): hoy no explotables (el token por defecto es de lectura), pero si cambia ese default, una action comprometida podría escribir en el repo. Arreglado en [#66](https://github.com/lucasrodrich/ingsoft3-tp01/pull/66) (`permissions: {}` en los deploys, `contents: read` en integración y e2e): **0 alertas abiertas**.
 
-**Los hallazgos de CodeQL.** El primer análisis encontró **4 alertas `actions/missing-workflow-permissions`**, una por cada job que no declaraba permisos (`deploy-qa`, `integracion`, `e2e`, `deploy-prod`). Categoría OWASP: **A01 Broken Access Control** (mínimo privilegio). ¿Explotable? En un repo personal nuevo el token es de sólo lectura por defecto, así que hoy no. Pero si alguien cambia ese default, cualquier paso de esos jobs (por ejemplo, una action de terceros comprometida) podría escribir en el repo. Lo arreglé en [#66](https://github.com/lucasrodrich/ingsoft3-tp01/pull/66): `permissions: {}` en los deploys (sólo hacen `curl` a los hooks) y `contents: read` en integración y e2e (sólo hacen checkout). Hoy hay **0 alertas abiertas**.
+### 2. El PR de Dependabot que mergeé, y por qué
 
-### 2. El PR de Dependabot que mergeé, y por qué me animé
-
-[#58](https://github.com/lucasrodrich/ingsoft3-tp01/pull/58): **`react-router-dom` 7.18.2 → 7.18.4**, un **patch** en SemVer. El changelog de las dos versiones sólo dice *Updated dependencies* (`react-router` 7.18.3 y 7.18.4): no hay cambios incompatibles. Me animé porque el riesgo era bajo y, sobre todo, porque mi cadena lo prueba entera. Antes del merge, `build-frontend` corrió los tests y el umbral de cobertura. Después del merge, la corrida pasó `deploy-qa`, la integración y la **e2e en Chromium**, que inicia sesión y navega por la app, o sea, usa el router de verdad. Ese verde es lo que hace que actualizar una dependencia lleve minutos y no dé miedo.
-
-Detalle honesto: el `deploy-prod` de esa corrida quedó **cancelado**, porque mergeé otro cambio antes de aprobarlo. La versión nueva llegó a PROD con el deploy siguiente (`154171f`).
-
-**Después: las alertas de seguridad.** Prender Dependabot destapó **alertas que ya existían**: PyJWT 2.10.1 tenía una **crítica**, varias altas y medias; además había una media en pytest y altas en `undici` y `source-map-js` (transitivas del front, que vienen de `jsdom` y `postcss`). Dependabot abrió un PR por cada una (#60, #64, #65). En vez de mergear tres, que habrían sido tres cadenas QA → PROD (y mi regla del TP7 es un merge por vez), las junté en [#73](https://github.com/lucasrodrich/ingsoft3-tp01/pull/73): PyJWT 2.15.1, pytest 9.0.3 (un **major**: lo corrí local antes, 31/31) y el lockfile del front.
+[#58](https://github.com/lucasrodrich/ingsoft3-tp01/pull/58): **`react-router-dom` 7.18.2 → 7.18.4**, un **patch**, con un changelog sin cambios incompatibles. Me animé porque toda la cadena lo verificó: tests y umbral, `deploy-qa`, integración y la **e2e en Chromium**, que navega y usa el router de verdad. Su `deploy-prod` quedó cancelado porque mergeé otro cambio antes; llegó a PROD con `154171f`. Prender Dependabot destapó alertas viejas (PyJWT **crítica**, pytest, `undici`, `source-map-js`): las junté en [#73](https://github.com/lucasrodrich/ingsoft3-tp01/pull/73) para correr una cadena y no tres (pytest 9 es **major**: lo corrí local, 31/31).
 
 ### 3. El monitor: cuánto tardó en avisarme
 
-UptimeRobot (plan gratuito, HEAD cada 5 minutos) sobre `https://restoflow-api-prod.onrender.com/health`, con alerta por email.
+UptimeRobot gratuito (HEAD cada 5 minutos) sobre el `/health` de PROD, con email. Antes de crearlo, `curl -I` daba **405** (FastAPI sólo atendía `GET`): [#67](https://github.com/lucasrodrich/ingsoft3-tp01/pull/67).
 
-- **Antes de crearlo** probé `curl -I` y PROD contestaba **405**: FastAPI sólo atendía `GET`. Lo arreglé en [#67](https://github.com/lucasrodrich/ingsoft3-tp01/pull/67) (`api_route` con `GET` y `HEAD`, más un test) y lo llevé a PROD por el pipeline.
-- **Primer intento (19/10), que el monitor no vio**: suspendí `restoflow-api-prod` de 18:26 a 18:29, **3 minutos**. El monitor chequea cada 5, y la caída entró entera entre dos chequeos: no hubo DOWN y UptimeRobot no registró ningún incidente. Los únicos emails de ese día fueron el par *TEST:* que manda al crear la cuenta. Aprendí que **una caída más corta que el intervalo puede pasar sin que nadie se entere**.
-- **La caída provocada (20/10, hora local)**, mantenida hasta que llegara la alerta:
+- **Primer intento (19/10)**: suspendí de 18:26 a 18:29. **No hubo alerta**: los 3 minutos entraron entre dos chequeos.
+- **Caída provocada (20/10)**: *Suspend* 19:22 → **DOWN 19:23:15** (HTTP 503) → *Resume* 19:24 → **UP 19:28:19** (incidente de 5 min 4 s).
 
-  | Evento | Hora |
-  |---|---|
-  | *Suspend* en Render | 19:22 |
-  | **DOWN** (`HTTP 503`, chequeo desde Falkenstein) | **19:23:15** |
-  | *Resume* en Render | 19:24 |
-  | **UP** | **19:28:19** |
-
-  **El monitor tardó ~1 minuto en avisarme**, pero fue suerte: el chequeo cayó justo después del *Suspend*. **El peor caso con el plan gratuito es ~5 minutos**, y el primer intento muestra que una caída más corta puede no verse nunca. UptimeRobot registró **5 min 4 s** de incidente. El UP llegó 4 minutos después del *Resume*: Render tarda en arrancar el servicio, y el monitor recién lo ve en su chequeo siguiente.
-- **Sin el monitor** me habría enterado cuando un usuario se quejara (el escenario del TP: 40 minutos un sábado), o en el próximo deploy, cuando el smoke fallara.
-- **El monitor quedó pausado** al terminar: despierto cada 5 minutos mantiene el servicio sin dormir y se come las 750 horas del workspace de Render.
+**Tardó ~1 minuto**, con suerte; el peor caso es ~5. Sin el monitor me habría enterado por un usuario o en el próximo smoke. Quedó **pausado**: despierto cada 5 minutos se come las 750 horas de Render.
 
 ### 4. Sentry: qué falla, qué tarda y qué se usa
 
-Dos proyectos: `restoflow-back` (`sentry-sdk[fastapi]`, el DSN llega por `SENTRY_DSN` sólo en PROD; sin la variable el SDK queda apagado en local, tests y QA) y `restoflow-front` (`@sentry/react`; el DSN está escrito en `main.jsx` porque **sólo sirve para enviar** datos, no para leerlos, y de todos modos viaja en el JavaScript que baja cualquier navegador). Subió por PR en [#68](https://github.com/lucasrodrich/ingsoft3-tp01/pull/68).
+Subió en [#68](https://github.com/lucasrodrich/ingsoft3-tp01/pull/68). Back: `sentry-sdk[fastapi]` con `SENTRY_DSN` sólo en PROD (sin la variable queda apagado). Front: `@sentry/react` con el DSN en `main.jsx`: **sólo sirve para enviar**, no para leer, y viaja igual en el JavaScript del navegador.
 
-- **Qué falla**:
-  - El error **provocado**: `GET /api/falla`, temporal. Lo saqué en [#72](https://github.com/lucasrodrich/ingsoft3-tp01/pull/72).
-  - Uno **real** que no buscaba: `RESTOFLOW-FRONT-1`, `TypeError: l is not a function` al salir de `/mesas`, que dejaba la pantalla en blanco. Estaba en el código **desde el primer commit** (14/08) y ningún test lo veía. Lo arreglé con un test de regresión en [#69](https://github.com/lucasrodrich/ingsoft3-tp01/pull/69). Es el incidente del postmortem (§6).
-- **Qué tarda**: en el back, la operación más lenta es **`POST /api/auth/login`**, con **P50 1,67 s y P95 1,68 s**. Le siguen `GET /api/falla` (365 ms) y `POST /api/auth/register` (P95 223 ms). Mi explicación es que bcrypt es lento a propósito, para que adivinar contraseñas cueste, y que el primer pedido después de un rato además paga el arranque de la base gratuita de Neon. `GET /api/categorias`, que no hace hash, tarda 24 ms. Desde el front, lo más lento es un **`POST`** con P50 297 ms, **P95 1,82 s** y 7,7 % de fallos.
-- **Qué se usa**: en la tabla *Transactions* del back, todas las operaciones tienen **menos de 0,01 pedidos por minuto (TPM)**. El único usuario fui yo, así que el número mide más mi prueba que un uso real. Contando pedidos (tiempo total ÷ P50), las más usadas empatan con **2 pedidos cada una**: **`POST /api/auth/login`**, `POST /api/auth/register` y `GET /api/categorias`. Que la más usada sea también la más lenta es justamente el dato que habría que mirar con usuarios de verdad.
-- **Las tarjetas** que nacieron de esos datos: [#70](https://github.com/lucasrodrich/ingsoft3-tp01/issues/70) (el P95 de 1,82 s) y [#71](https://github.com/lucasrodrich/ingsoft3-tp01/issues/71) (`POST /api/reservas` con 50 % de fallos: pocos pedidos, probablemente rechazos 4xx de validación que Sentry cuenta como fallo).
+- **Qué falla**: el error provocado `GET /api/falla` (sacado en [#72](https://github.com/lucasrodrich/ingsoft3-tp01/pull/72)) y uno **real**, `RESTOFLOW-FRONT-1` (§6).
+- **La más lenta**: **`POST /api/auth/login`**, **P50 1,67 s / P95 1,68 s**. Bcrypt es lento a propósito y el primer pedido paga el arranque de Neon; `GET /api/categorias` tarda 24 ms. Desde el front, un `POST` con **P95 1,82 s** y 7,7 % de fallos.
+- **La más usada**: todo está por debajo de 0,01 TPM porque el único usuario fui yo. Contando pedidos empatan con 2: **`POST /api/auth/login`**, `register` y `GET /api/categorias`.
+- **Tarjetas**: [#70](https://github.com/lucasrodrich/ingsoft3-tp01/issues/70) (el P95 de 1,82 s) y [#71](https://github.com/lucasrodrich/ingsoft3-tp01/issues/71) (`POST /api/reservas` con 50 % de fallos, probablemente rechazos 4xx).
 
-**Lo que Sentry me dice y el monitor no**: el monitor sólo sabe que `/health` contesta. La pantalla en blanco de Mesas tuvo `/health` en verde todo el tiempo.
+**Lo que Sentry ve y el monitor no**: la pantalla en blanco de Mesas tuvo `/health` en verde todo el tiempo.
 
-### 5. Mis métricas DORA (práctica)
+### 5. Métricas DORA (práctica)
 
-Las medí con la API de *Deployments* del environment `production` y los tiempos de las corridas.
+Medidas con la API de *Deployments* de `production`: **8 deploys** a PROD (08/10-19/10); **lead time** merge → PROD de ~5-6 min (#67 4,4; #69 5,7; #68 6,1), el peor de 45 min (#47, esperando mi aprobación); **change failure rate** 1 de 8 (la rotura del TP7 no cuenta: nunca llegó a PROD); **recuperación** ~15 min (§6). Lo primero que mejoraría es el peor lead time, que domina el gate humano; en serio lo cambiaría por un canary con rollback automático por tasa de errores.
 
-| Métrica | Valor | Cómo lo calculé |
-|---|---|---|
-| Deployment frequency | **8 deploys exitosos a PROD** entre el 08/10 y el 19/10 (4 el 08-09/10, 4 el 19/10) | deployments con estado `success` |
-| Lead time (merge → PROD) | **~5-6 min** típico: [#67](https://github.com/lucasrodrich/ingsoft3-tp01/pull/67) 4,4 min, [#69](https://github.com/lucasrodrich/ingsoft3-tp01/pull/69) 5,7 min, [#68](https://github.com/lucasrodrich/ingsoft3-tp01/pull/68) 6,1 min; el peor, [#47](https://github.com/lucasrodrich/ingsoft3-tp01/pull/47), 45 min | `mergedAt` del PR contra el `success` del deployment. De #69: 2,5 min de cadena automática y ~3 min esperando mi aprobación |
-| Change failure rate | **1 de 8** (12,5 %): el deploy de Sentry no rompió nada pero destapó un bug viejo que pidió un hotfix | La rotura a propósito del TP7 **no cuenta**: la e2e la frenó y nunca llegó a PROD |
-| Recovery time | **~15 min** desde que Sentry estuvo en PROD (21:59 UTC) hasta el arreglo en PROD (22:14 UTC). El rollback del TP6 tardó 35 s | timeline del postmortem (§6) |
+### 6. Postmortem sin culpables: pantalla en blanco al salir de Mesas (19/10)
 
-Por cadencia estoy en un nivel *high* (por día, no a demanda); por lead time y recuperación, en *elite*. Lo primero que mejoraría es el **lead time del peor caso**: lo domina mi aprobación manual (los 45 minutos de #47 fueron yo sin aprobar). La pieza que lo mueve es el gate humano del TP6. En un proyecto real lo reemplazaría por un canary con rollback automático por tasa de errores de Sentry.
-
-### 6. Postmortem sin culpables: la pantalla en blanco de Mesas (19/10)
-
-- **Qué pasó**: al salir de *Mesas* hacia otra sección, React tiraba `TypeError: l is not a function` y la app quedaba en blanco hasta recargar. No se perdían datos. El defecto estaba **desde el primer commit (14/08)**, en todos los entornos, y nadie lo había reportado.
-- **Detección y resolución (UTC)**: Sentry llega a PROD con #68 a las **21:59**. Entre 22:00 y 22:08, usando PROD, la pantalla queda en blanco y Sentry abre `RESTOFLOW-FRONT-1` con la ruta y el stack. El arreglo con test de regresión ([#69](https://github.com/lucasrodrich/ingsoft3-tp01/pull/69)) se mergea a las 22:08 y está en PROD a las **22:14**: unos **15 minutos** desde que el error fue visible. El monitor no se enteró nunca: `/health` estuvo en verde todo el tiempo.
-- **Causa técnica**: `useEffect(load, [])`. `load` devuelve una Promise, y React toma lo que devuelve un efecto como su función de limpieza; al desmontar la pantalla intentaba llamarla. Arreglo: `useEffect(() => { load() }, [])`.
-- **Causa raíz (qué del sistema lo hizo posible, no quién)**:
-  1. Nada verificaba el patrón: el proyecto no tiene ESLint con las reglas de hooks de React.
-  2. Ninguna prueba **salía** de Mesas: los unitarios del front (TP5) no cubren páginas, y la e2e (TP7) crea y borra una mesa sin navegar a otra sección.
-  3. Hasta el TP9 no había observabilidad del front: un error en el navegador de un usuario no le llegaba a nadie.
-- **Acciones**: hechas, el arreglo con test de regresión, la búsqueda del mismo patrón en las demás páginas (no había otro caso) y Sentry en el front. Pendientes, ESLint con `eslint-plugin-react-hooks` en `build-frontend`, un paso de navegación entre secciones en la e2e, y una alerta de Sentry por email ante un *issue* nuevo en PROD.
-- **Aprendizajes**: "nadie se quejó" no es "anda"; el monitor dice si la app está **viva**, no si **funciona**. Lo que la pirámide de pruebas deja afuera se ve recién en producción, y Sentry es la red para eso. Y la cadena hizo barato el arreglo: del diagnóstico a PROD fueron unos minutos, con QA, integración, e2e y aprobación incluidos.
+- **Qué pasó**: al salir de *Mesas*, `TypeError: l is not a function` y la app en blanco hasta recargar, sin pérdida de datos. Estaba **desde el primer commit (14/08)** y nadie lo había reportado.
+- **Timeline (UTC)**: Sentry llega a PROD 21:59 → entre 22:00 y 22:08 abre `RESTOFLOW-FRONT-1` y lo diagnostico → arreglo con test de regresión ([#69](https://github.com/lucasrodrich/ingsoft3-tp01/pull/69)) mergeado 22:08 → en PROD **22:14**.
+- **Causa técnica**: `useEffect(load, [])`; `load` devuelve una Promise y React la toma como limpieza. Arreglo: `useEffect(() => { load() }, [])`.
+- **Causa raíz (qué del sistema, no quién)**: no hay ESLint con reglas de hooks; ninguna prueba **salía** de Mesas (los unitarios no cubren páginas y la e2e no navega); y hasta el TP9 un error del navegador no le llegaba a nadie.
+- **Acciones**: hechas, el arreglo, revisar las demás páginas (no había otro caso) y Sentry en el front. Pendientes, `eslint-plugin-react-hooks` en `build-frontend`, navegación entre secciones en la e2e y una alerta de Sentry por email.
+- **Aprendizaje**: "nadie se quejó" no es "anda"; el monitor dice si está **viva**, no si **funciona**.
 
 ### 7. Problemas encontrados y cómo los resolví
 
-- **`/health` contestaba 405 a `HEAD`** y el monitor habría marcado *Down* con PROD viva: lo vi con `curl -I` antes de crear el monitor (§3).
-- **CodeQL en mi propio pipeline**: las 4 alertas de permisos (§1).
-- **Dependabot abrió 17 PRs de una vez** (versiones nuevas + seguridad). Analicé y mergeé uno de rutina (#58) y junté los de seguridad en uno (#73). Para que no se repita el ruido, el próximo paso sería agrupar las actualizaciones menores con `groups` en `dependabot.yml`.
-- **PyJWT 2.15 avisa con claves HMAC cortas** (`InsecureKeyLengthWarning`, menos de 32 bytes para HS256): el secreto de mis tests tenía 31; lo alargué.
-- **El arreglo #72 (sacar `/api/falla`) quedó esperando aprobación** y PROD siguió con el endpoint, que contesta 500. Lo detecté al revisar *Deployments* para las métricas DORA. Terminé aprobando esa corrida (la #123) un día después: era un commit sano, así que PROD quedó sin el endpoint, y la corrida de #73 vino detrás. La lección es que una aprobación pendiente es trabajo sin terminar, y no la ve nadie si no mira *Deployments*.
-- **Sentry encontró un bug real** que llevaba dos meses en el código (§4 y §6).
+- **`/health` daba 405 a `HEAD`**: lo vi con `curl -I` antes del monitor (§3).
+- **CodeQL marcó mi pipeline**: los permisos (§1).
+- **17 PRs de Dependabot de golpe**: mergeé uno de rutina y junté los de seguridad; el próximo paso sería `groups` en `dependabot.yml`.
+- **PyJWT 2.15 avisa con claves HMAC de menos de 32 bytes**: el secreto de los tests tenía 31; lo alargué.
+- **Una aprobación olvidada**: la corrida de #72 quedó un día esperando y PROD siguió con `/api/falla` (500). La aprobé al verlo en *Deployments*. Una aprobación pendiente es trabajo sin terminar.
 
 ### 8. Declaración de uso de IA (TP9)
 
-Claude me guió y escribió el código y la configuración: `dependabot.yml`, los `permissions` de los jobs, el `HEAD` de `/health`, la integración de Sentry en back y front, el diagnóstico y el arreglo del bug de Mesas, el PR #73 de seguridad, las métricas DORA (calculadas con `gh api` sobre *Deployments*) y el borrador de esta sección, postmortem incluido. Yo hice lo que requería mis cuentas y mis clics: prender las protecciones en *Settings*, crear los proyectos de Sentry y la variable `SENTRY_DSN` en Render, el monitor de UptimeRobot, la caída y la vuelta, aprobar los deploys a PROD y mergear. **Cómo lo verifiqué**: las protecciones las veo activas en *Security*; el `curl -I` a `/health` de PROD da 200; el error de Mesas lo reproduje con el test de regresión, que fallaba antes del arreglo; corrí local los tests del back y del front con las dependencias nuevas antes de abrir #73; y los números de DORA los contrasté con los tiempos de los jobs de una corrida. Puedo explicar qué mira y qué no mira cada pieza.
+Claude escribió el código y la configuración (`dependabot.yml`, `permissions`, `HEAD` en `/health`, Sentry, el arreglo de Mesas, #73), calculó DORA con `gh api` y redactó esta sección. Yo prendí las protecciones, creé los proyectos de Sentry y `SENTRY_DSN`, el monitor, la caída y la vuelta, y aprobé y mergeé. Lo verifiqué en *Security*, con `curl -I` a PROD, con el test de regresión que fallaba antes del arreglo, corriendo local los tests con las dependencias nuevas y contrastando DORA con los tiempos de los jobs.
