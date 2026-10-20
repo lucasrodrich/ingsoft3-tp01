@@ -959,7 +959,7 @@ Por cadencia estoy en un nivel *high* (por día, no a demanda); por lead time y 
 - **CodeQL en mi propio pipeline**: las 4 alertas de permisos (§1).
 - **Dependabot abrió 17 PRs de una vez** (versiones nuevas + seguridad). Analicé y mergeé uno de rutina (#58) y junté los de seguridad en uno (#73). Para que no se repita el ruido, el próximo paso sería agrupar las actualizaciones menores con `groups` en `dependabot.yml`.
 - **PyJWT 2.15 avisa con claves HMAC cortas** (`InsecureKeyLengthWarning`, menos de 32 bytes para HS256): el secreto de mis tests tenía 31; lo alargué.
-- **El arreglo #72 (sacar `/api/falla`) quedó esperando aprobación** y PROD siguió con el endpoint, que contesta 500. Lo detecté al revisar *Deployments* para las métricas DORA. Llega a PROD con la corrida de #73, y la corrida vieja la rechacé por obsoleta.
+- **El arreglo #72 (sacar `/api/falla`) quedó esperando aprobación** y PROD siguió con el endpoint, que contesta 500. Lo detecté al revisar *Deployments* para las métricas DORA. Terminé aprobando esa corrida (la #123) un día después: era un commit sano, así que PROD quedó sin el endpoint, y la corrida de #73 vino detrás. La lección es que una aprobación pendiente es trabajo sin terminar, y no la ve nadie si no mira *Deployments*.
 - **Sentry encontró un bug real** que llevaba dos meses en el código (§4 y postmortem).
 
 ### 7. Declaración de uso de IA (TP9)
