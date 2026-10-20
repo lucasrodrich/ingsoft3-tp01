@@ -905,7 +905,7 @@ Claude me guió bloque por bloque y escribió el HCL (`main.tf`, `variables.tf`,
 
 ## TP9 — DevSecOps, observabilidad y feedback continuo
 
-Release [`v9.0.0`](https://github.com/lucasrodrich/ingsoft3-tp01/releases/tag/v9.0.0). El postmortem del incidente que encontró Sentry está en [`postmortem.md`](postmortem.md).
+Release [`v9.0.0`](https://github.com/lucasrodrich/ingsoft3-tp01/releases/tag/v9.0.0). El postmortem del incidente que encontró Sentry está en el §6.
 
 ### 1. Las tres capas, activas (y qué no mira cada una)
 
@@ -952,7 +952,7 @@ Dos proyectos: `restoflow-back` (`sentry-sdk[fastapi]`, el DSN llega por `SENTRY
 
 - **Qué falla**:
   - El error **provocado**: `GET /api/falla`, temporal. Lo saqué en [#72](https://github.com/lucasrodrich/ingsoft3-tp01/pull/72).
-  - Uno **real** que no buscaba: `RESTOFLOW-FRONT-1`, `TypeError: l is not a function` al salir de `/mesas`, que dejaba la pantalla en blanco. Estaba en el código **desde el primer commit** (14/08) y ningún test lo veía. Lo arreglé con un test de regresión en [#69](https://github.com/lucasrodrich/ingsoft3-tp01/pull/69). Es el incidente del [postmortem](postmortem.md).
+  - Uno **real** que no buscaba: `RESTOFLOW-FRONT-1`, `TypeError: l is not a function` al salir de `/mesas`, que dejaba la pantalla en blanco. Estaba en el código **desde el primer commit** (14/08) y ningún test lo veía. Lo arreglé con un test de regresión en [#69](https://github.com/lucasrodrich/ingsoft3-tp01/pull/69). Es el incidente del postmortem (§6).
 - **Qué tarda**: en el back, la operación más lenta es **`POST /api/auth/login`**, con **P50 1,67 s y P95 1,68 s**. Le siguen `GET /api/falla` (365 ms) y `POST /api/auth/register` (P95 223 ms). Mi explicación es que bcrypt es lento a propósito, para que adivinar contraseñas cueste, y que el primer pedido después de un rato además paga el arranque de la base gratuita de Neon. `GET /api/categorias`, que no hace hash, tarda 24 ms. Desde el front, lo más lento es un **`POST`** con P50 297 ms, **P95 1,82 s** y 7,7 % de fallos.
 - **Qué se usa**: en la tabla *Transactions* del back, todas las operaciones tienen **menos de 0,01 pedidos por minuto (TPM)**. El único usuario fui yo, así que el número mide más mi prueba que un uso real. Contando pedidos (tiempo total ÷ P50), las más usadas empatan con **2 pedidos cada una**: **`POST /api/auth/login`**, `POST /api/auth/register` y `GET /api/categorias`. Que la más usada sea también la más lenta es justamente el dato que habría que mirar con usuarios de verdad.
 - **Las tarjetas** que nacieron de esos datos: [#70](https://github.com/lucasrodrich/ingsoft3-tp01/issues/70) (el P95 de 1,82 s) y [#71](https://github.com/lucasrodrich/ingsoft3-tp01/issues/71) (`POST /api/reservas` con 50 % de fallos: pocos pedidos, probablemente rechazos 4xx de validación que Sentry cuenta como fallo).
@@ -968,19 +968,31 @@ Las medí con la API de *Deployments* del environment `production` y los tiempos
 | Deployment frequency | **8 deploys exitosos a PROD** entre el 08/10 y el 19/10 (4 el 08-09/10, 4 el 19/10) | deployments con estado `success` |
 | Lead time (merge → PROD) | **~5-6 min** típico: [#67](https://github.com/lucasrodrich/ingsoft3-tp01/pull/67) 4,4 min, [#69](https://github.com/lucasrodrich/ingsoft3-tp01/pull/69) 5,7 min, [#68](https://github.com/lucasrodrich/ingsoft3-tp01/pull/68) 6,1 min; el peor, [#47](https://github.com/lucasrodrich/ingsoft3-tp01/pull/47), 45 min | `mergedAt` del PR contra el `success` del deployment. De #69: 2,5 min de cadena automática y ~3 min esperando mi aprobación |
 | Change failure rate | **1 de 8** (12,5 %): el deploy de Sentry no rompió nada pero destapó un bug viejo que pidió un hotfix | La rotura a propósito del TP7 **no cuenta**: la e2e la frenó y nunca llegó a PROD |
-| Recovery time | **~15 min** desde que Sentry estuvo en PROD (21:59 UTC) hasta el arreglo en PROD (22:14 UTC). El rollback del TP6 tardó 35 s | timeline del postmortem |
+| Recovery time | **~15 min** desde que Sentry estuvo en PROD (21:59 UTC) hasta el arreglo en PROD (22:14 UTC). El rollback del TP6 tardó 35 s | timeline del postmortem (§6) |
 
 Por cadencia estoy en un nivel *high* (por día, no a demanda); por lead time y recuperación, en *elite*. Lo primero que mejoraría es el **lead time del peor caso**: lo domina mi aprobación manual (los 45 minutos de #47 fueron yo sin aprobar). La pieza que lo mueve es el gate humano del TP6. En un proyecto real lo reemplazaría por un canary con rollback automático por tasa de errores de Sentry.
 
-### 6. Problemas encontrados y cómo los resolví
+### 6. Postmortem sin culpables: la pantalla en blanco de Mesas (19/10)
+
+- **Qué pasó**: al salir de *Mesas* hacia otra sección, React tiraba `TypeError: l is not a function` y la app quedaba en blanco hasta recargar. No se perdían datos. El defecto estaba **desde el primer commit (14/08)**, en todos los entornos, y nadie lo había reportado.
+- **Detección y resolución (UTC)**: Sentry llega a PROD con #68 a las **21:59**. Entre 22:00 y 22:08, usando PROD, la pantalla queda en blanco y Sentry abre `RESTOFLOW-FRONT-1` con la ruta y el stack. El arreglo con test de regresión ([#69](https://github.com/lucasrodrich/ingsoft3-tp01/pull/69)) se mergea a las 22:08 y está en PROD a las **22:14**: unos **15 minutos** desde que el error fue visible. El monitor no se enteró nunca: `/health` estuvo en verde todo el tiempo.
+- **Causa técnica**: `useEffect(load, [])`. `load` devuelve una Promise, y React toma lo que devuelve un efecto como su función de limpieza; al desmontar la pantalla intentaba llamarla. Arreglo: `useEffect(() => { load() }, [])`.
+- **Causa raíz (qué del sistema lo hizo posible, no quién)**:
+  1. Nada verificaba el patrón: el proyecto no tiene ESLint con las reglas de hooks de React.
+  2. Ninguna prueba **salía** de Mesas: los unitarios del front (TP5) no cubren páginas, y la e2e (TP7) crea y borra una mesa sin navegar a otra sección.
+  3. Hasta el TP9 no había observabilidad del front: un error en el navegador de un usuario no le llegaba a nadie.
+- **Acciones**: hechas, el arreglo con test de regresión, la búsqueda del mismo patrón en las demás páginas (no había otro caso) y Sentry en el front. Pendientes, ESLint con `eslint-plugin-react-hooks` en `build-frontend`, un paso de navegación entre secciones en la e2e, y una alerta de Sentry por email ante un *issue* nuevo en PROD.
+- **Aprendizajes**: "nadie se quejó" no es "anda"; el monitor dice si la app está **viva**, no si **funciona**. Lo que la pirámide de pruebas deja afuera se ve recién en producción, y Sentry es la red para eso. Y la cadena hizo barato el arreglo: del diagnóstico a PROD fueron unos minutos, con QA, integración, e2e y aprobación incluidos.
+
+### 7. Problemas encontrados y cómo los resolví
 
 - **`/health` contestaba 405 a `HEAD`** y el monitor habría marcado *Down* con PROD viva: lo vi con `curl -I` antes de crear el monitor (§3).
 - **CodeQL en mi propio pipeline**: las 4 alertas de permisos (§1).
 - **Dependabot abrió 17 PRs de una vez** (versiones nuevas + seguridad). Analicé y mergeé uno de rutina (#58) y junté los de seguridad en uno (#73). Para que no se repita el ruido, el próximo paso sería agrupar las actualizaciones menores con `groups` en `dependabot.yml`.
 - **PyJWT 2.15 avisa con claves HMAC cortas** (`InsecureKeyLengthWarning`, menos de 32 bytes para HS256): el secreto de mis tests tenía 31; lo alargué.
 - **El arreglo #72 (sacar `/api/falla`) quedó esperando aprobación** y PROD siguió con el endpoint, que contesta 500. Lo detecté al revisar *Deployments* para las métricas DORA. Terminé aprobando esa corrida (la #123) un día después: era un commit sano, así que PROD quedó sin el endpoint, y la corrida de #73 vino detrás. La lección es que una aprobación pendiente es trabajo sin terminar, y no la ve nadie si no mira *Deployments*.
-- **Sentry encontró un bug real** que llevaba dos meses en el código (§4 y postmortem).
+- **Sentry encontró un bug real** que llevaba dos meses en el código (§4 y §6).
 
-### 7. Declaración de uso de IA (TP9)
+### 8. Declaración de uso de IA (TP9)
 
-Claude me guió y escribió el código y la configuración: `dependabot.yml`, los `permissions` de los jobs, el `HEAD` de `/health`, la integración de Sentry en back y front, el diagnóstico y el arreglo del bug de Mesas, el PR #73 de seguridad, las métricas DORA (calculadas con `gh api` sobre *Deployments*) y el borrador de esta sección y del postmortem. Yo hice lo que requería mis cuentas y mis clics: prender las protecciones en *Settings*, crear los proyectos de Sentry y la variable `SENTRY_DSN` en Render, el monitor de UptimeRobot, la caída y la vuelta, aprobar los deploys a PROD y mergear. **Cómo lo verifiqué**: las protecciones las veo activas en *Security*; el `curl -I` a `/health` de PROD da 200; el error de Mesas lo reproduje con el test de regresión, que fallaba antes del arreglo; corrí local los tests del back y del front con las dependencias nuevas antes de abrir #73; y los números de DORA los contrasté con los tiempos de los jobs de una corrida. Puedo explicar qué mira y qué no mira cada pieza.
+Claude me guió y escribió el código y la configuración: `dependabot.yml`, los `permissions` de los jobs, el `HEAD` de `/health`, la integración de Sentry en back y front, el diagnóstico y el arreglo del bug de Mesas, el PR #73 de seguridad, las métricas DORA (calculadas con `gh api` sobre *Deployments*) y el borrador de esta sección, postmortem incluido. Yo hice lo que requería mis cuentas y mis clics: prender las protecciones en *Settings*, crear los proyectos de Sentry y la variable `SENTRY_DSN` en Render, el monitor de UptimeRobot, la caída y la vuelta, aprobar los deploys a PROD y mergear. **Cómo lo verifiqué**: las protecciones las veo activas en *Security*; el `curl -I` a `/health` de PROD da 200; el error de Mesas lo reproduje con el test de regresión, que fallaba antes del arreglo; corrí local los tests del back y del front con las dependencias nuevas antes de abrir #73; y los números de DORA los contrasté con los tiempos de los jobs de una corrida. Puedo explicar qué mira y qué no mira cada pieza.
