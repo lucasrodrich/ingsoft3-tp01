@@ -616,7 +616,7 @@ Claude escribió el HCL adaptándolo a mi app y a los cambios de Neon. Yo instal
 
 ## TP9 — DevSecOps, observabilidad y feedback continuo
 
-Release [`v9.0.0`](https://github.com/lucasrodrich/ingsoft3-tp01/releases/tag/v9.0.0).
+Release [`v9.0.0`](https://github.com/lucasrodrich/ingsoft3-tp01/releases/tag/v9.0.0). El postmortem completo está en [`postmortem.md`](postmortem.md); acá va resumido (§6).
 
 ### 1. Las tres capas (y qué no mira cada una)
 
